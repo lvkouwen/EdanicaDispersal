@@ -1,0 +1,174 @@
+---
+title: "Data exploration and selection"
+author: "Leon van Kouwen, l.vankouwen@has.nl"
+date: "2025-11-10"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = F, cache=F)
+
+library(lubridate)
+library(data.table)
+library(ggplot2)
+library(GGally)
+library(ggpubr)
+library(ggpmisc)
+library(ggrepel)
+library(ggforce)
+library(GGally)
+library(janitor)
+library(MASS)
+library(vegan)
+library(lmerTest)
+library(lme4)
+library(dplyr)
+library(tidyr)
+library(tidytable)
+library(emmeans)
+
+options("scipen"=1, "digits"=7)
+
+```
+
+```{r load and format data}
+
+mayflies_lab <- fread(".//Data//raw_data_edanica.csv") %>%
+  mutate(date_sample = as.Date(date_sample,  origin = "1899-12-30"),
+         date_photo = as.Date(date_photo, origin = "1899-12-30",),
+         dry_weight = case_when(dry_weight>50 ~ NA,
+                                .default = dry_weight)) #%>%
+  
+mayflies_lab_long <- mayflies_lab %>% 
+  pivot_longer(cols = c(10, 12, 13, 15, 16), 
+               names_to = "parameter", values_to = "value")
+
+mayflies_field_NA <- mayflies_lab %>% 
+  dplyr::group_by(date_sample, location, transect, distance, sex) %>%
+  dplyr::summarise(mayflies = if(all(is.na(mayflies))) NA_real_ else (sum(mayflies, na.rm = T))) %>%
+  filter(is.na(mayflies)) %>% 
+  mutate(ID = paste0(date_sample, location, transect, distance))
+    
+mayflies_field <- mayflies_lab %>% 
+  dplyr::group_by(date_sample, location, transect, distance, sex) %>%
+  dplyr::summarise(mayflies = (sum(mayflies, na.rm = T))) %>%
+  ungroup() %>%
+  filter(!is.na(sex)) %>%
+  complete(date_sample, location, transect, distance, sex, 
+           fill = list(mayflies = 0)) %>%
+  mutate(ID = paste0(date_sample, location, transect, distance),
+         mayflies = case_when(ID %in% mayflies_field_NA$ID ~ NA, 
+                              TRUE ~ mayflies)) %>%
+  select(-ID)
+
+rm(mayflies_field_NA)
+
+facets <- c("body_length" = "Body length (mm)",
+            "pronotum_width" = "Pronotum width (mm)",
+            "mesonotum_width" = "Mesonotum width (mm)",
+            "dry_weight" = "Dry weight (mg)",
+            "wing_area" = "Wing area (mm2)",
+            "wing_aspect_ratio" = "Wing aspect ratio")
+            #"no_mayflies" = "Number of individuals (n)")
+
+facets <- c(
+  "body_length" = "Body length (mm)",
+  "pronotum_width" = "Pronotum\nwidth (mm)",
+  "mesonotum_width" = "Mesonotum\nwidth (mm)",
+  "wing_area" = "Wing area (mm²)",
+  "dry_weight" = "Dry weight (mg)")
+
+my_theme <-   theme(text = element_text(size=7, face="bold"),
+        axis.title.y = element_blank(),
+        strip.placement = "outside",
+        axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+        axis.text.y=element_text(hjust=.8,  color="black"),
+        legend.position = "none",
+        axis.ticks.y = element_line(linewidth = .2, color="grey"),
+        axis.ticks.x = element_line(linewidth = .2, color="grey"),
+        panel.background = element_blank(),
+        plot.background =  element_rect(colour = "white", fill = "white", linewidth = 0.5),
+        panel.border = element_rect(colour = "grey", fill="white", linewidth=.5),
+        panel.spacing.x = unit(0.1, "lines"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face="bold", hjust=.5),
+        plot.margin = margin(1,0,0,0, "mm"))
+```
+
+reliability check for wing area. based on this --> removed reliability = 3.
+reliability check for thorax width. based on this --> removed reliability = 2.
+created clean, long datasheet with selected parms
+
+```{r check reliability}
+
+plot_wing_reliability <- mayflies_lab_long %>% 
+  filter(sex=="f") %>%
+  filter(parameter %in% parms_selected) %>%
+  filter(!is.na(wing_reliability)) %>%
+  ggplot(aes(x=as.factor(wing_reliability), y=value)) +
+  stat_boxplot(geom = "errorbar",
+              width = 0.15) +
+  geom_boxplot(fill="white", outlier.color="grey", outlier.size = .5)+
+  ggtitle("wing reliability")+
+  my_theme+
+  facet_wrap(~parameter, scale="free_y")
+
+plot_thorax_reliability <- mayflies_lab_long %>% 
+  filter(sex=="f") %>%
+  filter(parameter %in% parms_selected) %>%
+  filter(!is.na(pronotum_mesonotum_reliability)) %>%
+  ggplot(aes(x=as.factor(pronotum_mesonotum_reliability), y=value)) +
+  stat_boxplot(geom = "errorbar",
+              width = 0.15) +
+  geom_boxplot(fill="white", outlier.color="grey", outlier.size = .5)+
+  ggtitle("pro- and mesonotum reliability")+
+  my_theme+
+  facet_wrap(~parameter, scale="free_y")
+
+plot_bl_reliability <- mayflies_lab_long %>% 
+  filter(sex=="f") %>%
+  filter(parameter %in% parms_selected) %>%
+  filter(!is.na(body_length_reliability)) %>%
+  ggplot(aes(x=as.factor(body_length_reliability), y=value)) +
+  stat_boxplot(geom = "errorbar",
+              width = 0.15) +
+  geom_boxplot(fill="white", outlier.color="grey", outlier.size = .5)+
+  ggtitle("body length reliability")+
+  my_theme+
+  facet_wrap(~parameter, scale="free_y")
+
+ggarrange(plot_wing_reliability, plot_thorax_reliability, plot_bl_reliability, nrow=1)
+           
+ggsave("wing_notum_reliability.pdf", 
+       width = 163.6*2, height = 163.6, units = "mm", dpi=1000)                
+ggsave("wing_notum_reliability.png", 
+       width = 163.6*2, height = 163.6, units = "mm", dpi=1000)  
+
+```
+
+```{r remove unreliable measurements based on plots}
+ 
+mayflies_lab_long_clean <-
+   mayflies_lab_long %>%
+  filter(parameter %in% parms_selected) %>%
+  dplyr::mutate(value = case_when(wing_reliability == 3 & parameter %in% parms_selected[grepl("wing", parms_selected)] ~ NA,
+                                  .default = value),
+                value = case_when(pronotum_mesonotum_reliability == 2 & parameter == "pronotum_width" ~ NA,
+                                  .default = value),
+                value = case_when(pronotum_mesonotum_reliability == 2 & parameter == "mesonotum_width" ~ NA,
+                                  .default = value),
+                value = case_when(body_length_reliability > 1 & parameter == "body_length" ~ NA,
+                                  .default = value)) %>%
+  select(-body_length_reliability, -wing_reliability, -pronotum_mesonotum_reliability)
+```
+
+
+write everything
+
+```{r write the dfs for further analysis}
+
+fwrite(mayflies_lab_long_clean, "mayflies_lab_long_clean.csv")
+fwrite(mayflies_field, "mayflies_field.csv")
+
+```

@@ -1,0 +1,222 @@
+---
+title: "Weather_water"
+author: "Leon van Kouwen, l.vankouwen@has.nl"
+date: "2025-04-02"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = T, cache=F)
+
+library(tidytable)
+library(lubridate)
+library(data.table)
+library(ggplot2)
+library(ggpubr)
+library(MuMIn)
+library(ggbreak)
+library(ggpmisc)
+library(janitor)
+library(emmeans)
+library(MASS)
+library(lmerTest)
+library(lme4)
+library(glmmTMB)
+library(weathermetrics)
+library(dplyr)
+library(tidyr)
+
+
+options("scipen"=1, "digits"=7)
+
+```
+
+loading all water quality and weather data
+
+```{r load data}
+ms_to_bft <- function(x) {
+  case_when(
+    x < 0.3 ~ 0,
+    x < 1.6 ~ 1,
+    x < 3.4 ~ 2,
+    x < 5.5 ~ 3,
+    x < 8.0 ~ 4,
+    x < 10.8 ~ 5,
+    x < 13.9 ~ 6,
+    x < 17.2 ~ 7,
+    x < 20.8 ~ 8,
+    x < 24.5 ~ 9,
+    x < 28.5 ~ 10,
+    x < 32.7 ~ 11,
+    TRUE ~ 12
+  )
+}
+
+alpha.value <- 1
+
+mayflies_field <- fread(".//Data//raw_data_edanica.csv") %>%
+  mutate(date_sample = as.Date(date_sample, format = "%Y-%m-%d"))
+
+dates <- mayflies_field %>% 
+  dplyr::group_by(date_sample) %>%
+  dplyr::summarise(mayflies=sum(mayflies, na.rm=T))
+
+dates.range <- c(min(dates$date_sample)-5, max(dates$date_sample)+5)
+dates.range <- seq(from = dates.range[1], to = dates.range[2], by = "day")
+
+STN.choice <- 275 # Deelen
+# STN 269 = Lelystad
+
+# data from knmi, see https://www.daggegevens.knmi.nl/klimatologie/daggegevens
+weather_hour <- fread(".//Weather//uur1.csv") %>% 
+  rbind(fread(".//Weather//uur2.csv")) %>% 
+  mutate(YYYYMMDD = as.Date(as.character(YYYYMMDD), "%Y%m%d"),
+         HH = as.integer(HH))
+
+weather_hour$timestamp <- as.POSIXct(
+  paste(weather_hour$YYYYMMDD, sprintf("%02d:00:00", weather_hour$HH - 1)),
+  format="%Y-%m-%d %H:%M"
+)
+
+names(weather_hour)[1] <- "STN"
+
+weather_hour <- weather_hour %>% 
+  mutate(RH = case_when(RH<0 ~ 0,
+                        .default = RH/10))
+
+# logger data
+leuv <- fread(".//Weather//Leuv.full.txt") 
+
+leuv.hour <- leuv %>% 
+  dplyr::mutate(YYYYMMDD = as.Date(Datum),
+                HH = hour(Datum)+1)
+
+leuv <- leuv %>% 
+  dplyr::mutate(YYYYMMDD = as.Date(Datum)) %>%
+  dplyr::group_by(YYYYMMDD) %>%
+  dplyr::summarise(temp = mean(`Temperatuur water`),
+                   count = length(`Temperatuur water`),
+                   month = max(month(YYYYMMDD)),
+                   water.level = mean(Waterstand, na.rm=T)) %>% 
+  filter(count > 20) %>%
+  filter(YYYYMMDD >= "2022-06-01" & YYYYMMDD <= "2024-05-31")
+
+env_data <- fread(".//Data//raw_data_edanica_env.csv") %>%
+  mutate(date_photo_shade = as.Date(date_photo_shade,  origin = "1899-12-30"),
+         date_nymph= as.Date(date_nymph, origin = "1899-12-30",))
+
+
+```
+
+months 6 to 10 are absent in stream temp.
+
+
+```{r table of conditions per sampling day}
+
+Table1 <- 
+    leuv.hour %>%
+    filter(YYYYMMDD %in% unique(mayflies_field$date_sample)) %>%
+    group_by(YYYYMMDD) %>%
+    summarise(watermean = mean(`Temperatuur water`),
+              watermin = min(`Temperatuur water`),
+              watermax = max(`Temperatuur water`),
+              waterlevelmean = mean(Waterstand),
+              waterlevelmin = min(Waterstand),
+              waterlevelmax = max(Waterstand)) %>% 
+  
+  left_join(weather_hour %>%
+  filter(YYYYMMDD %in% unique(mayflies_field$date_sample)) %>%
+  filter(STN == STN.choice) %>%
+  group_by(YYYYMMDD) %>%
+    summarise(
+          temp.mean = mean(T, na.rm = TRUE) / 10,
+          temp.min  = min(T, na.rm = TRUE) / 10,
+          temp.max  = max(T, na.rm = TRUE) / 10,
+          wind.mean = mean(FH, na.rm = TRUE)/10,
+          wind.min  = min(FH, na.rm = TRUE)/10,
+          wind.max  = max(FH, na.rm = TRUE)/10,
+          wind.mean.bft = ms_to_bft(wind.mean),
+          wind.min.bft = ms_to_bft(wind.min),
+          wind.max.bft = ms_to_bft(wind.max),
+          prec      = sum(RH, na.rm = TRUE),
+          count     = n()))%>%
+  t()
+
+colnames(Table1) <- Table1[1,]
+Table1 <- Table1[2:nrow(Table1),]
+
+Table2 <- 
+  mayflies_field %>% 
+    group_by(date_sample, sex) %>%
+    summarise(n = sum(mayflies, na.rm=T)) %>%
+    pivot_wider(id_cols = "date_sample", names_from = sex, values_from = n) %>%
+    mutate(ratio_fm = round(100*f / (f+m), digits = 0)) %>%
+
+    left_join(leuv.hour %>%
+    mutate(hour = hour(YYYYMMDD),
+           date_event = if_else(hour < 4, as.Date(YYYYMMDD) - 1, as.Date(YYYYMMDD))) %>%
+    filter(hour >= 20 | hour < 4) %>%
+    filter(date_event %in% unique(mayflies_field$date_sample)) %>%
+    group_by(date_event) %>%
+    summarise(watermean = mean(`Temperatuur water`),
+              watermin = min(`Temperatuur water`),
+              watermax = max(`Temperatuur water`),
+              waterlevelmean = mean(Waterstand),
+              waterlevelmin = min(Waterstand),
+              waterlevelmax = max(Waterstand)),
+    by = c("date_sample" = "date_event")) %>%
+  
+  left_join(
+    weather_hour %>%
+    mutate(
+      hour = hour(timestamp),
+      date_event = if_else(hour < 4, as.Date(timestamp) - 1, as.Date(timestamp))  # 0–3u hoort bij vorige dag
+    ) %>%
+    filter(STN == STN.choice) %>%
+    filter(hour >= 20 | hour < 4) %>%
+    group_by(date_event) %>%
+    summarise(
+          temp.mean = mean(T, na.rm = TRUE) / 10,
+          temp.min  = min(T, na.rm = TRUE) / 10,
+          temp.max  = max(T, na.rm = TRUE) / 10,
+          wind.mean = mean(FH, na.rm = TRUE)/10,
+          wind.min  = min(FH, na.rm = TRUE)/10,
+          wind.max  = max(FH, na.rm = TRUE)/10,
+          wind.mean.bft = ms_to_bft(wind.mean),
+          wind.min.bft = ms_to_bft(wind.min),
+          wind.max.bft = ms_to_bft(wind.max),
+          prec      = sum(RH, na.rm = TRUE),
+          count     = n()),
+    by=c("date_sample" = "date_event")) %>%
+  t()
+
+
+
+colnames(Table2) <- Table2[1,]
+Table2 <- Table2[2:nrow(Table2),]
+
+write.csv(Table1, "Table1.csv")
+write.csv(Table2, "Table2.csv")
+
+
+tmp <- weather_hour %>% filter(YYYYMMDD %in% c("2024-05-14"))
+
+```
+
+```{r overview env data}
+env_data %>%
+  pivot_longer(cols = 4:17, names_to = "parameter", values_to = "value") %>%
+  mutate(value = case_when(!grepl("nymph", parameter) ~ value*100,
+                           .default = value)) %>%
+  group_by(location, parameter) %>%
+  summarize(mean=round(median(value, na.rm=T), digits=2),
+            sd = round(sd(value, na.rm=T), digits=2),
+            .groups  = "drop") %>%
+  pivot_wider(names_from = location, values_from = c(mean, sd), names_glue ="{location}_{.value}") %>%
+  select(1,2,5,3,6,4,7) %>%
+  fwrite(.,"overview.locations.csv")
+
+```
+

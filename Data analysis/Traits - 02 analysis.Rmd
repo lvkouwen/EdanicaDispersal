@@ -1,0 +1,1177 @@
+---
+title: "03 Traits"
+author: "Leon van Kouwen, l.vankouwen@has.nl"
+date: "2025-11-10"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+
+PART 1: LOADING ALL PACKAGES, DATA AND PARAMETER INFORMATION
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, cache=F)
+
+library(tidytable)
+library(r2glmm)
+library(lme4)
+library(tidyverse)
+library(GGally)
+library(broom.mixed)
+library(lubridate)
+library(ggh4x)
+library(forcats)
+library(data.table)
+library(diptest)
+library(ggplot2)
+library(scales)
+library(ggpubr)
+library(car)
+library(ggpmisc)
+library(janitor)
+library(MuMIn)  
+library(broom)  
+library(emmeans)
+library(AICcmodavg)
+library(MASS)
+library(lmerTest)
+library(lme4)
+library(glmmTMB)
+library(dplyr)
+library(tidyr)
+library(stats)
+library(rstatix)
+library(vegan)
+
+options("scipen"=999, "digits"=7)
+
+```
+
+loading all data, shapes, etc.
+
+```{r load data}
+
+shapes = c("m" = 17,
+           "f" = 16)
+
+cols.clean <-  c("black","gray")
+
+shapes.1 = 16
+  
+plot_order <- c( "body_length",
+   "pronotum_width",
+   "mesonotum_width",
+   "wing_area",
+   "dry_weight",
+     "dry_weight_residual_relative")
+
+facets <- c(
+  "body_length" = "A",
+  "pronotum_width" = "B",
+  "mesonotum_width" = "C",
+  "wing_area" = "D",
+  "dry_weight" = "E",
+  "dry_weight_residual_relative" = "F")
+
+facets_df <- as.data.frame(facets) %>%
+  rownames_to_column(., var = "parameter")
+
+facets_clean <- c(
+  "body_length" = "Body length (mm)",
+  "pronotum_width" = "Pronotum\nwidth (mm)",
+  "mesonotum_width" = "Mesonotum\nwidth (mm)",
+  "wing_area" = "Wing area (mm²)",
+  "dry_weight" = "Dry weight (mg)",
+  "dry_weight_residual_relative" = "Relative residual\ndry weight (%)")
+
+my_theme <-   theme(text = element_text(size=7, face="bold"),
+        axis.title.y = element_blank(),
+        strip.placement = "outside",
+        axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+        axis.text.y=element_text(hjust=.8,  color="black"),
+        legend.position = "none",
+        axis.ticks.y = element_line(linewidth = .2, color="grey"),
+        axis.ticks.x = element_line(linewidth = .2, color="grey"),
+        panel.background = element_blank(),
+        plot.background =  element_rect(colour = "white", fill = "white", linewidth = 0.5),
+        panel.border = element_rect(colour = "grey", fill="white", linewidth=.5),
+        panel.spacing.x = unit(0.1, "lines"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face="bold", hjust=.5),
+        plot.margin = margin(1,0,0,0, "mm"))
+
+
+# this csv is output from the 01 explore and clean script.
+mayflies_field <- fread(".\\Data\\mayflies_field.csv") %>% filter(!location == "hierd2") %>%
+  mutate(date_sample_num = as.numeric(as.Date(date_sample, format="%d/%m/%Y")) - 
+                            min(as.numeric(as.Date(date_sample, format="%d/%m/%Y"))) + 1)
+
+# this csv is output from the 01 explore and clean script.
+mayflies_lab_long_clean <- fread(".\\Data\\mayflies_lab_long_clean.csv") %>% 
+  filter(!is.na(sex)) %>% filter(!sex=="") %>% 
+  filter(sex=="f") %>%
+  mutate(date_sample_num = as.numeric(as.Date(date_sample, format="%d/%m/%Y")) - 
+                            min(as.numeric(as.Date(date_sample, format="%d/%m/%Y"))) + 1,
+         distance_log = log(distance+1)) %>%
+  filter(!is.na(value))
+ 
+distances.interpolated <- tibble(
+  distance = seq(0, 150, length.out = 151)) %>%
+ mutate(distance_log = log(distance + 1)) 
+
+distances.interpolated.cl <- distances.interpolated
+
+dates.interpolated <- tibble(
+  date_sample_num = seq(min(mayflies_lab_long_clean$date_sample_num), 
+                        max(mayflies_lab_long_clean$date_sample_num), 
+                        length.out = 100)) 
+
+dates.interpolated.cl <- dates.interpolated
+
+```
+
+
+PART 2: calculate residual traits
+
+```{r residual analysis for relatieve residual mass}
+
+# --- Prepare data ---
+tmp <- mayflies_lab_long_clean %>%
+  pivot_wider(
+    id_cols = c("ind_code", "distance", "location", "transect", "distance_log", "date_sample_num"),
+    names_from = parameter,
+    values_from = value
+  ) %>%
+  mutate(
+    dry_weight_log     = log(dry_weight),
+    body_length_log    = log(body_length),
+    pronotum_width_log = log(pronotum_width),
+    mesonotum_width_log = log(mesonotum_width),
+    wing_area_log      = log(wing_area)
+  )
+
+# --- Fit model with only 0 m individuals ---
+m_fit_loglog0m <- lm(
+  dry_weight_log ~ body_length_log + pronotum_width_log + mesonotum_width_log + wing_area_log,
+  data = tmp %>% filter(distance == 0)
+)
+
+model <- m_fit_loglog0m
+
+# --- Model results ---
+tidy_mod <- tidy(model)
+n_obs <- nobs(model)
+
+# calculate R2
+r2 <- suppressWarnings(r.squaredGLMM(model))
+r2_tab <- r2beta(model, method = "nsj", partial = TRUE) %>%
+  as.data.frame() %>%
+  select(Effect, Rsq) %>%
+  pivot_wider(names_from = Effect, values_from = Rsq) %>% 
+  rename_with(~ paste0("r2_", str_remove_all(.x, "_exp|_log")))
+
+# logLik and df
+logLik_val <- logLik(model)
+df_val <- attr(logLik_val, "df")
+
+# VIF
+vif_check <- tryCatch(max(vif(model)), error = function(e) NA)
+
+# AIC
+aic_val <- AIC(model)
+
+# Build table with model results
+final_results_residual <- tibble(
+  model           = "loglog0m",
+  n_obs           = n_obs,
+  df_val          = df_val,
+  aic_full        = aic_val,
+  logLik          = as.numeric(logLik_val),
+  r2_marginal     = r2[1, "R2m"],
+  r2_conditional  = r2[1, "R2c"],
+  vif_max         = vif_check
+) %>%
+  bind_cols(r2_tab)
+
+fwrite(final_results_residual, "final_results_residual.csv")
+
+# --- EFFECT-LEVEL RESULTS ---
+
+# Coefficients and BH-correction
+model.summary <- summary(model)$coefficients %>%
+  as.data.frame() %>%
+  rownames_to_column("Effect") %>%
+  transmute(
+    Effect,
+    Estimate,
+    p.adj = p.adjust(`Pr(>|t|)`, method = "BH")
+  ) %>%
+  filter(Effect != "(Intercept)")
+
+# Calculate dAIC per term
+drop_terms <- c("body_length_log", "pronotum_width_log", "mesonotum_width_log", "wing_area_log")
+aic_drop <- sapply(drop_terms, function(trm) {
+  m_drop <- update(model, paste0(". ~ . - ", trm))
+  AIC(m_drop)
+}) %>%
+  as.data.frame() %>%
+  rownames_to_column("Effect")
+
+names(aic_drop) <- c("Effect", "AIC")
+aic_drop <- aic_drop %>%
+  mutate(dAIC = AIC - AIC(model)) %>%
+  select(Effect, dAIC)
+
+# R2 per predictor
+r2_tab_effects <- r2beta(model, method = "nsj", partial = TRUE) %>%
+  as.data.frame() %>%
+  select(Effect, Rsq)
+
+# Nerge table
+summary_table_residual <- r2_tab_effects %>%
+  left_join(model.summary, by = "Effect") %>%
+  left_join(aic_drop, by = "Effect")
+
+fwrite(summary_table_residual, "Table2_summary_table_residual.csv") # R2 of full model in final model replaced by R2 from model summary
+
+
+# --- Calculate residuals for the entire dataset on all individuals ---
+tmp <- tmp %>%
+  filter(!is.na(body_length) & !is.na(pronotum_width) & !is.na(mesonotum_width) &
+           !is.na(wing_area) & !is.na(dry_weight)) %>%
+  mutate(
+    dry_weight_predicted = exp(predict(m_fit_loglog0m, newdata = .)),
+    dry_weight_predicted_relative = 100 * dry_weight_predicted / dry_weight,
+    dry_weight_residual = dry_weight - dry_weight_predicted,
+    dry_weight_residual_relative = 100 * dry_weight_residual / dry_weight
+  )
+
+# Add results to long-form dataset
+residual_abs <- mayflies_lab_long_clean %>%
+  filter(parameter == "dry_weight" & ind_code %in% tmp$ind_code) %>%
+  left_join(tmp %>% select(ind_code, dry_weight_predicted_relative), by = "ind_code") %>%
+  mutate(parameter = "dry_weight_predicted_relative",
+         value = dry_weight_predicted_relative) %>%
+  select(-dry_weight_predicted_relative)
+
+residual_rel <- mayflies_lab_long_clean %>%
+  filter(parameter == "dry_weight" & ind_code %in% tmp$ind_code) %>%
+  left_join(tmp %>% select(ind_code, dry_weight_residual_relative), by = "ind_code") %>%
+  mutate(parameter = "dry_weight_residual_relative",
+         value = dry_weight_residual_relative) %>%
+  select(-dry_weight_residual_relative)
+
+mayflies_lab_long_clean <- bind_rows(mayflies_lab_long_clean, residual_abs, residual_rel)
+
+# Clean up
+rm(tmp, residual_abs, residual_rel, model, r2, r2_tab, r2_tab_effects, aic_drop, model.summary,
+   tidy_mod, logLik_val, df_val, vif_check, aic_val, n_obs, m_fit_loglog0m)
+ 
+```
+
+
+PART 3: HISTOGRAMS, CORRELATIONS, ETC. FOR TRANSFORMATION
+
+```{r histograms and qq for transformation}
+
+mayflies_lab_long_model <-  mayflies_lab_long_clean %>%
+    mutate(parameter = fct_relevel(parameter, plot_order)) %>%
+    filter(!parameter=="dry_weight_predicted_relative") 
+
+plot.hist <- 
+  mayflies_lab_long_model %>%
+  ggplot(aes(x=value)) + 
+  labs (x = "Trait value", y="Frequency")+
+  geom_histogram(fill = "black", bins = 30)+
+  my_theme+
+  theme(axis.text = element_text(angle = 90),
+        axis.title.y = element_text()) +
+  facet_wrap(~parameter, scales = "free", labeller = as_labeller(facets_clean), nrow=1)
+
+plot.qq <- 
+  mayflies_lab_long_model %>%
+  ggplot(aes(sample=value)) + 
+  labs(y="Sample quantiles", x="Theoretical quantiles")+
+  stat_qq() +
+  stat_qq_line() +
+  my_theme+
+  theme(strip.text = element_blank(),
+        axis.text.x = element_text(hjust = .5),
+        axis.title.y = element_text()) +
+  facet_wrap(~parameter, scales = "free", labeller = as_labeller(facets_clean), nrow=1)
+  
+ggarrange(plot.hist, plot.qq, nrow=2)
+ggsave("Supp. C. Fig. 1. Histograms.png", 
+        width = 163.6, height = 163.6, units = "mm", dpi=1200) 
+ggsave("Supp. C. Fig. 1. Histograms.pdf", 
+        width = 163.6, height = 163.6, units = "mm", dpi=1200)
+
+```
+
+Correlation plots of all traits
+
+```{r correlation}
+
+cor_traits <- mayflies_lab_long_clean %>%
+  filter(!parameter=="dry_weight_predicted_relative") %>%
+  mutate(parameter = factor(parameter, levels = plot_order)) %>%       
+  pivot_wider(id_cols = ind_code, names_from=parameter, values_from = value) %>% 
+  select(-1) %>%
+  cor(., use="pairwise.complete.obs", method = "spearman") %>% 
+  as.data.frame() %>%
+  mutate(parameter = row.names(.)) %>%
+  relocate(parameter, .before = 1)
+
+fwrite(cor_traits, "cor.traits.spearman.csv")
+
+my_fn <- function(data, mapping, col="black", lwd=.2, method="lm", ...){
+      p <- ggplot(data = data, mapping = mapping) + 
+      geom_point(color="grey", size=.2) + 
+      geom_smooth(method=method, colour="black", linewidth=lwd)
+      p
+}
+
+facets_clean["wing_area"] <- "Wing area (mm\u00B2)"
+
+corr_traits_plot <- mayflies_lab_long_clean %>%
+  mutate(parameter = factor(parameter, levels = plot_order)) %>%
+  pivot_wider(id_cols = ind_code, names_from = parameter, values_from = value) %>%
+  select(all_of(plot_order)) %>%  # correcte volgorde
+  ggpairs(
+    columnLabels = facets_clean[plot_order],
+
+    lower = list(continuous = my_fn),
+    upper = list(continuous = wrap("cor", size = 3, method="spearman"))) +
+  my_theme + 
+  theme(axis.text.x = element_text(hjust = .5))
+
+png("Supp. C. Fig. 2. Correlations.png", width = 163.6, height = 163.6, units = "mm", res=1200) 
+print(corr_traits_plot)
+dev.off()
+
+ggsave(plot = corr_traits_plot, "Supp. C. Fig. 2. Correlations.pdf", 
+        width = 163.6, height = 163.6, units = "mm", dpi=1200)
+
+```
+
+```{r density plot of m/f}
+
+fread("mayflies_lab_long_clean.csv") %>% 
+  filter(!is.na(sex)) %>% filter(!sex=="") %>% 
+
+  ggplot(aes(x=value, color=sex, fill=sex))+
+  geom_density(alpha=0.8)+
+  geom_vline(aes(xintercept = value, color=sex), linetype="dashed", data=mayflies_lab_long_clean_median)+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values=cols.clean)+
+  xlab("Trait value")+
+  scale_color_manual(values=cols.clean)+
+  my_theme+
+  facet_wrap(~fct_relevel(parameter, plot_order), scales="free", labeller=as_labeller(facets))
+
+ggsave("Supp. E. Fig. 4. Traits female-male.pdf", 
+       width = 163.6, height = 163.6, units = "mm", dpi=1000)  
+ggsave("Supp. E. Fig. 4. Traits female-male.png", 
+       width = 163.6, height = 163.6, units = "mm", dpi=1000) 
+```
+
+
+PART 4: RUN AND PLOT MODELS ON DISTANCE + DATE.
+
+```{r select the best models and create summary table}
+
+model.dep <- "value"
+model.distance <- "distance"
+model.distance.log <- "distance_log"
+model.date <- "date_sample_num"
+model.reff <- "(1|location:transect)"
+
+model.formula.norm <- as.formula(paste(model.dep, "~", model.distance, "+", model.date, "+", model.reff))
+model.formula.log <- as.formula(paste(model.dep, "~", model.distance.log, "+", model.date, "+", model.reff))
+
+mayflies_lab_long_model <- mayflies_lab_long_model 
+
+parm <- "dry_weight"
+results <- list()
+plots.log.hist <- list()
+plots.log.qq <- list()
+plots.log.res <- list()
+plots.norm.hist <- list()
+plots.norm.qq <- list()
+plots.norm.res <- list()
+
+for (parm in unique(mayflies_lab_long_model$parameter)) {
+  print(parm)
+  tmp <- mayflies_lab_long_model %>%
+    filter(parameter == parm) %>%
+    mutate(site_id = interaction(location, transect, drop=T))
+    
+
+  mod.lm.norm <- lmer(model.formula.norm, 
+                      data = tmp, REML = FALSE)
+
+  
+  plot.data <- tibble(residuals = residuals(mod.lm.norm),
+  fitted = fitted(mod.lm.norm))
+  
+  plots.norm.hist[[length(plots.norm.hist) + 1]] <- 
+    plot.data %>%
+      ggplot(aes(x = residuals)) +
+      geom_histogram(bins = 30, fill = "grey30") +
+      labs(x = "Residuals", y = "Frequency", title = parm) 
+  
+   plots.norm.qq[[length(plots.norm.qq) + 1]] <- 
+     plot.data %>%
+  ggplot( aes(sample = residuals)) +
+    stat_qq() +
+    stat_qq_line() +
+  labs(x = "Theoretical quantiles", y = "Sample quantiles") 
+ 
+  plots.norm.res[[length(plots.norm.res) + 1]] <- 
+   plot.data %>%
+   ggplot(aes(x = fitted, y = residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(x = "Fitted values", y = "Residuals") 
+
+  mod.lm.log <- lmer(model.formula.log, 
+                     data = tmp, REML = FALSE)
+  
+  plot.data <- tibble(residuals = residuals(mod.lm.norm),
+  fitted = fitted(mod.lm.log))
+  
+  plots.log.hist[[length(plots.log.hist) + 1]] <- 
+    plot.data %>%
+      ggplot(aes(x = residuals)) +
+      geom_histogram(bins = 30, fill = "grey30") +
+      labs(x = "Residuals", y = "Frequency", title = parm) 
+  
+   plots.log.qq[[length(plots.log.qq) + 1]] <- 
+     plot.data %>%
+  ggplot( aes(sample = residuals)) +
+    stat_qq() +
+    stat_qq_line() +
+  labs(x = "Theoretical quantiles", y = "Sample quantiles") 
+ 
+  plots.log.res[[length(plots.log.res) + 1]] <- 
+   plot.data %>%
+   ggplot(aes(x = fitted, y = residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(x = "Fitted values", y = "Residuals") 
+  
+  models <- list(lm_norm = mod.lm.norm, lm_log = mod.lm.log)
+  
+  for (name in names(models)) {
+    tidy_mod <- tidy(models[[name]], effects = "fixed")
+    n_obs = nobs(models[[name]])
+    
+    r2 <- suppressWarnings(r.squaredGLMM(models[[name]]))
+
+    r2_tab <- r2beta(models[[name]], method = "nsj", partial = TRUE) %>%
+      as.data.frame() %>%
+      select(Effect, Rsq) %>%
+      pivot_wider(names_from  = Effect, values_from = Rsq)
+    
+    drop_terms <- c(if (name=="lm_norm") "distance" else "distance_log",  "date_sample_num")
+    aic_drop <- sapply(drop_terms, function(trm) {
+      m_drop <- update(models[[name]], paste0(". ~ . - ", trm))
+      AIC(m_drop)
+    }) %>%
+    as.data.frame() %>%
+    rownames_to_column()
+    
+    names(aic_drop) <- c("parameter", "aic")
+    
+    row_distance <- tidy_mod %>% filter(term %in% c("distance", "distance_log"))
+    row_date <- tidy_mod %>% filter(term == "date_sample_num")
+ 
+    logLik_val = logLik(models[[name]])
+    df_val = attr(logLik_val, "df")
+    
+    vif_check = tryCatch(max(vif(models[[name]])), error = function(e) NA)
+    
+    res <- tibble(
+      parameter = parm,
+      n_obs = n_obs,
+      df_val = df_val,
+      vif_check = vif_check,
+      model = name,
+      
+      # aics
+      aic_full = AIC(models[[name]]),
+      aic_distance = if (name == "lm_norm") {aic_drop$aic[aic_drop$parameter == "distance"]
+        } else {aic_drop$aic[aic_drop$parameter == "distance_log"]},
+      aic_date = aic_drop$aic[aic_drop$parameter == "date_sample_num"],
+      
+      # r2
+      r2_marginal = r2[1, "R2m"],
+      r2_distance = if (name == "lm_norm") {r2_tab[1, "distance"] %>% as.numeric()} else {r2_tab[1, "distance_log"] %>% as.numeric()} ,
+      r2_date = r2_tab[1, "date_sample_num"] %>% as.numeric(),
+      r2_conditional = r2[1, "R2c"],
+      r2_reff = r2_conditional - r2_marginal,
+      
+      # p values
+      p_distance = row_distance$p.value,
+      p_date = row_date$p.value,
+      
+      # standard errors      
+      se_distance = row_distance$std.error,
+      se_date = row_date$std.error,
+
+      # estimates
+      estimate_distance = row_distance$estimate,
+      estimate_date = row_date$estimate,
+    )
+
+    results[[length(results) + 1]] <- res
+  }
+}
+
+
+n_models <- length(plots.log.hist)
+row.hist <- ggarrange(plotlist = plots.log.hist, ncol = n_models, nrow = 1)
+row.qq   <- ggarrange(plotlist = plots.log.qq,   ncol = n_models, nrow = 1)
+row.res  <- ggarrange(plotlist = plots.log.res,  ncol = n_models, nrow = 1)
+
+final_plot <- ggarrange(row.hist, row.qq, row.res,
+                        ncol = 1,
+                        labels = c("a", "b", "c"), 
+                        heights = c(1, 1, 1))
+print(final_plot)
+ggsave("models_log.png", width = 150, height = 150, units = "mm", dpi = 1200)
+
+n_models <- length(plots.norm.hist)
+row.hist <- ggarrange(plotlist = plots.norm.hist, ncol = n_models, nrow = 1)
+row.qq   <- ggarrange(plotlist = plots.norm.qq,   ncol = n_models, nrow = 1)
+row.res  <- ggarrange(plotlist = plots.norm.res,  ncol = n_models, nrow = 1)
+
+final_plot <- ggarrange(row.hist, row.qq, row.res,
+                        ncol = 1,
+                        labels = c("a", "b", "c"),  
+                        heights = c(1, 1, 1))
+print(final_plot)
+ggsave("models_norm.png", width = 150, height = 150, units = "mm", dpi = 1200)
+
+
+final_results <- bind_rows(results)
+fwrite(final_results, "final_results.csv")
+
+final_results <- final_results %>%
+  group_by(parameter) %>%
+  mutate(min_aic_full = min(aic_full)) %>%
+  ungroup() %>%
+  mutate(daic_full = aic_full - min_aic_full)
+
+aic_compare <- final_results %>%
+  select(parameter, model, aic_full) %>%
+  pivot_wider(names_from = model, values_from = aic_full, names_prefix = "aic_")
+
+# Best model with preference for most parsimonious model at ΔAIC < 2
+best_models <- final_results %>%
+  group_by(parameter) %>%
+  filter(if (any(model == "lm_norm" & daic_full < 2)) model == "lm_norm" else aic_full == min(aic_full)) %>%
+  ungroup() %>%
+  left_join(aic_compare, by = "parameter") %>%
+  mutate(
+    daic_vs_other = case_when(
+      model == "lm_norm" ~ -(aic_lm_norm - aic_lm_log),
+      model == "lm_log"  ~ -(aic_lm_log - aic_lm_norm)
+    )
+  ) %>%
+    mutate(
+    p_distance_adj = p.adjust(p_distance, method = "BH"),
+    p_date_adj = p.adjust(p_date, method = "BH"),
+  )
+
+# summary table
+summary_table <- best_models %>%
+  mutate(
+    
+    # Backtransform log(distance + 1)
+    estimate_distance_unlogged = case_when(
+      model == "lm_log" ~ exp(estimate_distance),
+      TRUE ~ estimate_distance),
+    
+    # Backtransform log(value) for dry_weight
+    estimate_distance_final = case_when(
+      parameter == "dry_weight" ~ exp(estimate_distance_unlogged),
+      TRUE ~ estimate_distance_unlogged)) %>%
+  
+  mutate(best_model = if_else(model == "lm_log", "log", "normal"))  %>%
+  transmute(parameter,
+            best_model,
+            n_obs,
+            aic_full,
+            daic_vs_other,
+            daic_distance = aic_distance - aic_full,
+            daic_date = aic_date - aic_full,
+            
+            r2_marginal,
+            r2_conditional,
+            r2_distance,
+            r2_date, 
+            r2_reff,
+            
+            p_distance_adj,
+            p_date_adj,
+            
+            estimate_distance = estimate_distance_final,
+            estimate_date
+            )
+
+
+summary_table %>%
+  transmute(
+    parameter,
+    best_model,
+    `# observations` = n_obs,
+
+    # Full model
+    `dAIC (full)` = daic_vs_other,
+    `r2_marg (full)` = r2_marginal,
+    `r2_cond (full)` = r2_conditional,
+
+    # Distance
+    `estimate (distance)` = estimate_distance,
+    `r2 (distance)` = r2_distance,
+    `p-value (distance)` = p_distance_adj,
+
+    # Date
+    `estimate (date)` = estimate_date,
+    `r2 (date)` = r2_date,
+    `p-value (date)` = p_date_adj
+  ) %>%
+ left_join(tibble(
+  parameter = names(facets_clean),
+  parameter_label = as.character(facets_clean)
+)) %>%
+  fwrite(.,"Table1_summary_all_models.csv")
+
+```
+
+```{r distance and date predict with selected models}
+
+distances.interpolated.cl.tmp <- distances.interpolated.cl[,c(1,2)]
+dates.interpolated.cl.tmp <- dates.interpolated.cl[,c(1)]
+
+for (parm in unique(mayflies_lab_long_model$parameter)) {
+  print(parm)
+  if (summary_table %>% filter(parameter == parm) %>% pull(best_model) == "log"){
+
+    tmp <- mayflies_lab_long_model %>%
+      filter(parameter == parm)
+  
+    model <- lmer(model.formula.log, data = tmp, REML = FALSE)
+    
+    # for distance the predicted values and confidence levels
+    
+    distances.interpolated <- distances.interpolated %>%
+      mutate(!!parm := emmeans(model, ~ distance_log, 
+             at = list(distance_log = log(seq(0, 150, length.out = 151) + 1))) %>% 
+             as.data.frame() %>%
+             pull(emmean))
+    
+    cl_tmp <- emmeans(model, ~ distance_log, 
+            at = list(distance_log = log(seq(0, 150, length.out = 151)+1))) %>% as.data.frame() 
+    
+    distances.interpolated.cl.tmp <- distances.interpolated.cl[,c(1,2)]
+    
+    distances.interpolated.cl.tmp <- distances.interpolated.cl.tmp %>% 
+      left_join(cl_tmp) %>%
+      select(-emmean, -SE, -df) %>%
+      mutate(parameter = parm)
+    
+    distances.interpolated.cl <- bind_rows(distances.interpolated.cl, distances.interpolated.cl.tmp)
+    
+    # for date the predicted values and confidence levels
+    
+    dates.interpolated <- dates.interpolated %>%
+      mutate(!!parm := emmeans(model, ~ date_sample_num, 
+             at = list(date_sample_num = seq(min(mayflies_lab_long_clean$date_sample_num), 
+                        max(mayflies_lab_long_clean$date_sample_num), 
+                        length.out = 100))) %>% 
+             as.data.frame() %>%
+             pull(emmean))
+    
+    cl_tmp <- emmeans(model, ~ date_sample_num, 
+              at = list(date_sample_num = seq(min(mayflies_lab_long_clean$date_sample_num), 
+                        max(mayflies_lab_long_clean$date_sample_num), 
+                        length.out = 100))) %>% 
+              as.data.frame()
+    
+    dates.interpolated.cl.tmp <- dates.interpolated.cl[,c(1)]
+    
+    dates.interpolated.cl.tmp <- dates.interpolated.cl.tmp %>% 
+      left_join(cl_tmp) %>%
+      select(-emmean, -SE, -df) %>%
+      mutate(parameter = parm)
+  
+    dates.interpolated.cl <- bind_rows(dates.interpolated.cl, dates.interpolated.cl.tmp)
+
+    } else {
+    
+    tmp <- mayflies_lab_long_model %>%
+      filter(parameter == parm)
+  
+    model <- lmer(model.formula.norm, data = tmp, REML = FALSE)
+    
+     # for distance the predicted values and confidence levels
+    
+    distances.interpolated <- distances.interpolated %>%
+      mutate(!!parm := emmeans(model, ~ distance, 
+             at = list(distance = seq(0, 150, length.out = 151))) %>% 
+             as.data.frame() %>%
+             pull(emmean))
+    
+    distances.interpolated <- distances.interpolated %>%
+      mutate(!!parm := emmeans(model, ~ distance, 
+             at = list(distance = seq(0, 150, length.out = 151))) %>% 
+             as.data.frame() %>%
+             pull(emmean))
+    
+    cl_tmp <- emmeans(model, ~ distance, 
+            at = list(distance = seq(0, 150, length.out = 151))) %>% as.data.frame() 
+    
+    distances.interpolated.cl.tmp <- distances.interpolated.cl[,c(1,2)]
+    
+    distances.interpolated.cl.tmp <- distances.interpolated.cl.tmp %>% 
+      left_join(cl_tmp) %>%
+      select(-emmean, -SE, -df) %>%
+      mutate(parameter = parm)
+    
+    distances.interpolated.cl <- bind_rows(distances.interpolated.cl, distances.interpolated.cl.tmp)
+      
+    
+    # for date the predicted values and confidence levels
+    
+    dates.interpolated <- dates.interpolated %>%
+      mutate(!!parm := emmeans(model, ~ date_sample_num, 
+             at = list(date_sample_num = seq(min(mayflies_lab_long_clean$date_sample_num), 
+                        max(mayflies_lab_long_clean$date_sample_num), 
+                        length.out = 100))) %>% 
+             as.data.frame() %>%
+             pull(emmean))
+    
+    cl_tmp <- emmeans(model, ~ date_sample_num, 
+              at = list(date_sample_num = seq(min(mayflies_lab_long_clean$date_sample_num), 
+                        max(mayflies_lab_long_clean$date_sample_num), 
+                        length.out = 100))) %>% 
+              as.data.frame()
+    
+    dates.interpolated.cl.tmp <- dates.interpolated.cl[,c(1)]
+    
+    dates.interpolated.cl.tmp <- dates.interpolated.cl.tmp %>% 
+      left_join(cl_tmp) %>%
+      select(-emmean, -SE, -df) %>%
+      mutate(parameter = parm)
+  
+    dates.interpolated.cl <- bind_rows(dates.interpolated.cl, dates.interpolated.cl.tmp)
+    
+    }
+}
+rm(distances.interpolated.cl.tmp)
+    
+distances.interpolated.long <- 
+  distances.interpolated %>%
+  pivot_longer(!1:2, names_to = "parameter", values_to = "value")
+
+distances.interpolated.long <- 
+  distances.interpolated.long %>% left_join(summary_table, by = "parameter")
+
+ distances.interpolated.cl <- 
+   distances.interpolated.cl %>%
+   filter(!is.na(lower.CL))
+
+dates.interpolated.long <- 
+  dates.interpolated %>%
+  pivot_longer(!1, names_to = "parameter", values_to = "value")
+
+dates.interpolated.long <- 
+  dates.interpolated.long %>% left_join(summary_table, by = "parameter")
+
+ dates.interpolated.cl <- 
+   dates.interpolated.cl %>%
+   filter(!is.na(lower.CL)) %>%
+   filter(!is.na(parameter))
+
+
+```
+
+```{r distance plots of selected models}
+
+facet_labeling_distance <- mayflies_lab_long_clean %>%
+  filter(!parameter=="dry_weight_predicted_relative") %>%
+  dplyr::group_by(distance, parameter) %>%
+    dplyr::summarise(mean = mean(value, na.rm = TRUE),
+              sd_val = sd(value, na.rm = TRUE),  
+              n = sum(!is.na(value)),
+  
+              ci_lower = mean - 1.96 * (sd_val / sqrt(n)),
+              ci_upper = mean + 1.96 * (sd_val / sqrt(n))) %>%
+  ungroup() %>%
+  group_by(parameter) %>%
+  mutate(max_ci = max(ci_upper),
+         min_ci = min(ci_lower)) %>%
+  left_join(facets_df) %>%
+  ungroup %>%
+  left_join(distances.interpolated.cl %>% group_by(parameter) %>% summarise(max_ci2 = max(upper.CL))) %>%
+  left_join(distances.interpolated.cl %>% group_by(parameter) %>% summarise(min_ci2 = min(lower.CL))) %>%
+  mutate(max_ci = case_when(max_ci < max_ci2 ~ max_ci2,
+                            .default = max_ci),
+         min_ci = case_when(min_ci < min_ci2 ~ min_ci,
+                            .default = min_ci2)) %>%
+  select(parameter, max_ci, min_ci, facets) %>%
+  unique()
+
+plot.distance <- mayflies_lab_long_clean %>%
+  filter(!parameter=="dry_weight_predicted_relative") %>%
+  dplyr::group_by(distance, parameter) %>%
+    dplyr::summarise(mean = mean(value, na.rm = TRUE),
+              median = median(value, na.rm = TRUE),
+              sd_val = sd(value, na.rm = TRUE),  
+              n = sum(!is.na(value)),
+              sdmin = case_when((mean - sd_val) < 0 ~ 0, TRUE ~ (mean - sd_val)),
+              sdmax = mean + sd_val,
+              ci_lower = mean - 1.96 * (sd_val / sqrt(n)),
+              ci_upper = mean + 1.96 * (sd_val / sqrt(n))) %>%
+  ungroup() %>%
+  left_join(facet_labeling_distance) %>%
+  ggplot() +
+  
+  # measured values
+  geom_point(aes(y=mean, x=distance), size=2, shape=shapes.1)+
+  geom_errorbar(aes(x = distance, ymin = ci_lower, ymax = ci_upper), inherit.aes = T, width=3, size=.2)+
+  geom_text(aes(x = 0, y = max_ci +  0.0*(max_ci-min_ci), label = facets),
+             hjust = 0, vjust = 1.2,
+             size = 2, fontface = "bold") +
+  
+  # model predictions
+  geom_line(data = distances.interpolated.long, 
+            aes(y = value, x=distance, linetype = p_distance_adj<0.05),
+            linewidth = .75, inherit.aes = FALSE) +
+  scale_linetype_manual(values = c("TRUE" = "solid", "FALSE" = "dotted")) +
+  geom_ribbon(data = distances.interpolated.cl,
+              aes(ymin = lower.CL, ymax = upper.CL, x=distance), alpha = 0.2) +
+  scale_x_continuous(breaks = c(0,25,50,100,150))+ 
+  xlab("Distance from the stream (m)")+
+  my_theme+
+  facet_nested_wrap(~fct_relevel(parameter, plot_order), scales="free_y", labeller=as_labeller(facets_clean),  
+             strip.position = "left", ncol=2) 
+
+
+print(plot.distance)
+
+ggsave(plot = plot.distance, "Fig. 5. Traits distance.png", 
+        width = 163.6, height = 163.6/2, units = "mm", dpi=1200)
+ggsave(plot = plot.distance, "Fig. 5. Traits distance.pdf", 
+        width = 163.6, height = 163.6/2, units = "mm", dpi=1200)
+```
+
+```{r date plots of selected models}
+
+facet_labeling_date <- mayflies_lab_long_clean %>%
+  filter(!parameter=="dry_weight_predicted_relative") %>%
+  dplyr::group_by(date_sample_num, parameter) %>%
+    dplyr::summarise(mean = mean(value, na.rm = TRUE),
+              sd_val = sd(value, na.rm = TRUE),  
+              n = sum(!is.na(value)),
+              ci_lower = mean - 1.96 * (sd_val / sqrt(n)),
+              ci_upper = mean + 1.96 * (sd_val / sqrt(n))) %>%
+  ungroup() %>%
+  group_by(parameter) %>%
+  mutate(max_ci = max(ci_upper),
+         min_ci = min(ci_lower)) %>%
+  left_join(facets_df) %>%
+  ungroup %>%
+  left_join(dates.interpolated.cl %>% group_by(parameter) %>% summarise(max_ci2 = max(upper.CL))) %>%
+  left_join(dates.interpolated.cl %>% group_by(parameter) %>% summarise(min_ci2 = min(lower.CL))) %>%
+  mutate(max_ci = case_when(max_ci < max_ci2 ~ max_ci2,
+                            .default = max_ci),
+         min_ci = case_when(min_ci < min_ci2 ~ min_ci,
+                            .default = min_ci2)) %>%
+  select(parameter, max_ci, min_ci, facets) %>%
+  unique()
+
+
+plot.date <-  mayflies_lab_long_clean %>% 
+  filter(!parameter=="dry_weight_predicted_relative") %>%
+  dplyr::group_by(date_sample_num, parameter) %>%
+  dplyr::summarise(mean = mean(value, na.rm = TRUE),
+              median = median(value, na.rm = TRUE),
+              sd_val = sd(value, na.rm = TRUE),  
+              n = sum(!is.na(value)),
+              sdmin = case_when((mean - sd_val) < 0 ~ 0, TRUE ~ (mean - sd_val)),
+              sdmax = mean + sd_val,
+              ci_lower = mean - 1.96 * (sd_val / sqrt(n)),
+              ci_upper = mean + 1.96 * (sd_val / sqrt(n))) %>%
+  ungroup() %>%
+  left_join(facet_labeling_date) %>%
+  ggplot() +
+  
+  # measured values
+  geom_point(aes(y=mean, x=date_sample_num), size=2, shape=shapes.1)+
+  geom_errorbar(aes(x = date_sample_num, ymin = ci_lower, ymax = ci_upper), inherit.aes = T, width=.2, size=.2)+
+  geom_text(aes(x = 1, y = max_ci + 0.15*(max_ci-min_ci), label = facets),
+             hjust = 0, vjust = 1.2,
+             size = 2, fontface = "bold") +
+
+  # model predictions
+  geom_line(data = dates.interpolated.long, 
+            aes(y = value, x=date_sample_num, linetype = p_date_adj<0.05),
+            linewidth = .75, inherit.aes = FALSE) +
+  scale_linetype_manual(values = c("TRUE" = "solid", "FALSE" = "dotted")) +
+  geom_ribbon(data = dates.interpolated.cl,
+              aes(ymin = lower.CL, ymax = upper.CL, x=date_sample_num), alpha = 0.2) +
+
+  scale_x_continuous(
+    breaks = seq(floor(min(mayflies_lab_long_clean$date_sample_num)), 
+                 ceiling(max(mayflies_lab_long_clean$date_sample_num)), 
+                 by = 1),
+    labels = function(x) format(as.Date(x, origin="1970-05-11"), "%b %d"))+
+  scale_y_continuous(position = "left")+
+  xlab("Date")+
+  my_theme +
+  theme(axis.text.x = element_text(angle = 90))+
+ facet_nested_wrap(~fct_relevel(parameter, plot_order), scales="free_y", labeller=as_labeller(facets_clean),  
+             strip.position = "left", ncol=2) 
+
+print(plot.date)
+
+ggsave(plot = plot.date, "Supp. D. Fig. 3. Traits date.png", 
+        width = 163.6, height = 163.6/2, units = "mm", dpi=1200)
+ggsave(plot = plot.date, "Supp. D. Fig. 3. Traits date.pdf", 
+        width = 163.6, height = 163.6/2, units = "mm", dpi=1200)
+```
+
+
+
+PART 5: NUMBERS PER TRAP
+
+```{r total numbers vs. distance model}
+
+mayflies_field_total <- mayflies_field %>% 
+  mutate(distance_log = log(distance+1)) %>%
+  dplyr::group_by(distance_log, distance, sex) %>%
+  dplyr::summarize(value = sum(mayflies, na.rm=T)) 
+
+mayflies_total_lm <- lm(value ~ distance_log * sex,
+      data = mayflies_field_total)
+
+mayflies_total_glm <- glm(value ~ distance_log * sex,
+      family = poisson(),
+      data = mayflies_field_total)
+
+AIC(mayflies_total_glm, mayflies_total_lm) # mayflies_total_lm lowest AIC!
+
+selected.model <- get(AIC(mayflies_total_glm, mayflies_total_lm) %>% rownames_to_column() %>% as.data.frame %>%
+  filter(AIC==min(AIC)) %>% pull(rowname) %>% as.character())
+
+summary(selected.model)
+r2beta(selected.model)
+
+mayflies_field_total.pvals <- emtrends(mayflies_total_lm, ~ sex, var = "distance_log") %>%
+  summary(infer=T) %>%
+  mutate(p.value.full = p.adjust(p.value, method="BH"),
+  p.value = case_when(
+    p.value.full < 0.001 ~ "p < 0.001*",
+    p.value.full < 0.05  ~ paste0("p = ", formatC(p.value.full, format = "f", digits = 3), "*"),
+    TRUE                 ~ paste0("p = ", formatC(p.value.full, format = "f", digits = 3))))
+
+print(mayflies_field_total.pvals)
+
+mayflies_field_total_predict <- emmeans(mayflies_total_lm, ~ distance_log | sex, 
+                         at = list(distance_log = log(seq(0, 150, length.out = 151) + 1)), type = "response") %>%
+  as_tibble() %>%
+  mutate(distance = exp(distance_log)-1) %>%
+  left_join(mayflies_field_total.pvals[,c(1,9)]) %>%
+  mutate(lower.CL = case_when(lower.CL <0 ~ 0,
+                               .default = lower.CL))
+
+
+
+```
+
+```{r total numbers vs. distance plot}
+
+dodge <- 5
+
+plot.totals <-
+  mayflies_field_total %>% 
+  ggplot() +
+  geom_hline(yintercept = 0, color = "grey80", linewidth = 0.3)+
+  
+  # measured values
+  geom_point(aes(y=value, x=distance, shape = as.factor(sex)), size=2, color="black", position = position_dodge(width=dodge))+
+  scale_shape_manual(values = shapes) +
+
+  # model predictions
+  geom_line(data = mayflies_field_total_predict, #%>% filter(!sexclutch=="m_no"),  
+            aes(y=emmean, x=distance, linetype = p.value.full > 0.05), color="black", size=1, 
+            position = position_dodge(width=dodge))+
+  scale_linetype_manual(values = c("TRUE" = "dotted", "FALSE" = "solid")) +
+  geom_ribbon(data = mayflies_field_total_predict, #%>% filter(!sexclutch=="m_no"),
+              aes(ymin = lower.CL, ymax = upper.CL, x=distance, group = sex), alpha = 0.2, 
+              position = position_dodge(width=dodge)) +
+  
+  # layout
+  scale_x_continuous(breaks = c(0,25,50,100,150))+
+  scale_y_continuous(breaks = seq(0, 200, by = 25))+
+  labs(title = "A")+
+  ylab("Total number of individuals")+
+  xlab("Distance from the stream (m)")+
+  my_theme+
+  theme(plot.margin = margin(2,0,1,0, "mm"),
+        plot.title = element_text(hjust = 0, margin = margin(t = 10, b = -20, l = 15)),
+        axis.title.y = element_text(hjust=.5),
+        axis.title.x = element_blank(),
+        axis.text.x=element_blank())
+
+
+```
+
+```{r per trap numbers vs. distance model}
+
+mayflies_field_pertrap <- mayflies_field %>% 
+  dplyr::mutate(distance_log = log(distance+1),
+         loc_trans = interaction(location, transect))
+
+mayflies.no.lm <- lmer(mayflies ~ distance_log * sex + (1 | loc_trans), 
+                       data = mayflies_field_pertrap, REML=T)
+mayflies.no.glm <-glmer(mayflies ~ distance_log * sex + (1 | loc_trans), 
+                         data = mayflies_field_pertrap, 
+                         family = poisson)
+mayflies.no.glm.negbin <-glmmTMB(mayflies ~ distance_log * sex + (1 | loc_trans), 
+                         data = mayflies_field_pertrap, 
+                         family = nbinom2)
+
+model_names <- data.frame(
+  model = ls(),
+  keep = (startsWith(ls(),"mayflies.no."))) %>%
+  filter(keep==T) %>%
+  pull(model)
+
+models <- mget(model_names)
+
+model_compare_pertrap <- data.frame(
+  model = model_names,
+  formula = sapply(models, function(m) paste(deparse(summary(m)$call), collapse = "")),
+  AIC = sapply(models, AIC),
+  BIC = sapply(models, BIC),
+  logLik = sapply(models, function(m) as.numeric(logLik(m))),
+  
+  # Marginal R² extraction
+  R2m = sapply(models, function(m) {
+    if (inherits(m, "merMod") || inherits(m, "glmmTMB")) {
+      suppressWarnings(r.squaredGLMM(m)[1, "R2m"])
+    } else {
+      NA
+    }
+  }),
+  
+  # Conditional R² extraction
+  R2c = sapply(models, function(m) {
+    if (inherits(m, "merMod") || inherits(m, "glmmTMB")) {
+      suppressWarnings(r.squaredGLMM(m)[1, "R2c"])
+    } else {
+      NA
+    }
+  })) %>%
+  mutate(dAIC = AIC - min(AIC, na.rm = TRUE),
+         dBIC = BIC - min(BIC, na.rm = TRUE)) %>%
+  mutate_if(is.numeric, round, digits = 3)
+
+print(model_compare_pertrap)
+model_of_choice_pertrap <- get(model_compare_pertrap %>% filter(dAIC == 0) %>% pull(model))
+print(model_of_choice_pertrap)
+
+mayflies_field_pertrap_predict <- expand.grid(
+  distance_log = log(seq(0, 150, length.out = 151) + 1),
+  sex = levels(as.factor(mayflies_field_pertrap$sex))) %>%
+  mutate(distance = exp(distance_log) - 1)
+
+mayflies_field_pertrap_predict$value <- predict(model_of_choice_pertrap, newdata = mayflies_field_pertrap_predict, type = "response", re.form = ~0)
+
+mayflies_field_pertrap.pvals <- emtrends(model_of_choice_pertrap, ~ sex, var = "distance_log") %>%
+  summary(infer=T) %>%
+  mutate(p.value.full = p.adjust(p.value, method="BH"),
+  p.value = case_when(
+    p.value.full < 0.001 ~ "p < 0.001*",
+    p.value.full < 0.05  ~ paste0("p = ", formatC(p.value.full, format = "f", digits = 3), "*"),
+    TRUE                 ~ paste0("p = ", formatC(p.value.full, format = "f", digits = 3))))
+
+print(mayflies_field_pertrap.pvals)
+
+mayflies_field_pertrap_predict <- emmeans(model_of_choice_pertrap, ~ distance_log | sex, 
+                         at = list(distance_log = log(seq(0, 150, length.out = 151) + 1)), type = "response") %>%
+  as_tibble() %>%
+  mutate(distance = exp(distance_log)-1) %>%
+  left_join(mayflies_field_pertrap.pvals[,c(1,9)]) %>%
+  mutate(asymp.LCL = case_when(asymp.LCL <0 ~ 0,
+                               .default = asymp.LCL))
+
+```
+
+```{r per trap numbers vs. distance plot}
+
+mayflies_field_pertrap_plot <- mayflies_field_pertrap %>%
+  dplyr::group_by(distance, sex) %>%
+  dplyr::summarise(mean = mean(mayflies, na.rm = TRUE),
+    median = median(mayflies, na.rm = TRUE),
+    sd_val = sd(mayflies, na.rm = TRUE),  
+    n = sum(!is.na(mayflies)),
+    sdmin = case_when((mean - sd_val) < 0 ~ 0, TRUE ~ (mean - sd_val)),
+    sdmax = mean + sd_val,
+    ci_lower = mean - 1.96 * (sd_val / sqrt(n)),
+    ci_upper = mean + 1.96 * (sd_val / sqrt(n))) %>%
+  ungroup() 
+
+dodge <- 5
+
+plot.pertrap <- 
+mayflies_field_pertrap_plot %>%
+  ggplot() +
+  geom_hline(yintercept = 0, color = "grey80", linewidth = 0.3)+
+  
+  # measured values
+  geom_point(aes(y=mean, x=distance, shape=as.factor(sex)), size=2, position = position_dodge(width = 5))+
+  scale_shape_manual(values = shapes) +
+  geom_errorbar(
+     aes(x = distance, ymin = ci_lower, ymax = ci_upper, group = sex),
+     inherit.aes = F,
+     width=3,
+     linewidth=.2, 
+     position = position_dodge(width = 5)) +
+  
+  # model predictions
+  geom_line(data = mayflies_field_pertrap_predict,,  
+            aes(y=response, x=distance, group=sex, linetype = p.value.full<0.05), size=1, position = position_dodge(width = 5))+
+  scale_linetype_manual(values = c("TRUE" = "solid", "FALSE" = "dotted")) +
+  geom_ribbon(data = mayflies_field_pertrap_predict,
+              aes(ymin = asymp.LCL, ymax = asymp.UCL, x=distance, group = sex), alpha = 0.2, position = position_dodge(width = 5)) +
+  
+  # layout
+  scale_x_continuous(breaks = c(0,25,50,100,150))+
+  scale_y_continuous(breaks = seq(0, 5, by = 1))+
+  ggtitle("B")+
+  ylab("Number of individuals per trap")+
+  xlab("Distance from the stream (m)")+
+  my_theme+
+  theme(plot.margin = margin(1,0,0,0, "mm"),
+        plot.title = element_text(hjust = 0, margin = margin(t = 10, b = -20, l = 15)),
+        axis.title.y = element_text(hjust=.5))
+
+```
+
+```{r aggregated plot}
+
+numbers.plot <- ggarrange(plot.totals, plot.pertrap, nrow = 2, align = "v")
+
+ggsave(plot = numbers.plot, "Fig. 4. Mayflies numbers.pdf", 
+        width = 163.6/2, height = 163.6, units = "mm", dpi=1200)  
+ggsave(plot = numbers.plot, "Fig. 4. Mayflies numbers.png", 
+        width = 163.6/2, height = 163.6, units = "mm", dpi=1200)  
+
+```

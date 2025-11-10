@@ -1,0 +1,53 @@
+nr,parameter,LGN,LGN_grouped_large
+2,ag.maize,maïs,agri.cult
+3,ag.potato,aardappelen,agri.cult
+4,ag.beets,bieten,agri.cult
+5,ag.cereal,granen,agri.cult
+6,ag.misc,overige.landbouwgewassen,agri.cult
+10,ag.bulbs,bloembollen,agri.cult
+9,ag.orchard,boomgaarden,agri.cult
+61,ag.orchard,boomkwekerijen,agri.cult
+62,ag.orchard.fruit,fruitkwekerijen,agri.cult
+1,ag.grass,agrarisch.gras,agri.grass
+8,ag.greenhouse,glastuinbouw,agri.cult
+29,ag.sun,zonneparken,urban
+16,aq,zoet water,aq
+17,aq,zout water,aq
+12,nat.for.coniferous,naaldbos,nat.for
+11,nat.for.deciduous,loofbos,nat.for
+20,urb.for.primary,bos.in.primair.bebouwd.gebied,nat.for
+22,urb.for.secondary,bos.in.secundair.bebouwd.gebied,nat.for
+40,nat.for.peat,bos.in.hoogveengebied,nat.for
+43,nat.for.swamp,bos.in.moerasgebied,nat.for
+45,nat.low.grassland,natuurgraslanden,nat.shrub.grass
+46,nat.low.coastal.grass,gras.in.het.kustgebied,nat.shrub.grass
+47,ag.grass.misc,overig.gras,nat.shrub.grass
+33,nat.high.dune,duinen.met.hoge.vegetatie,nat.shrub.grass
+331,nat.high.peat,struikvegetatie.in.hoogveengebied.hoog,nat.shrub.grass
+332,nat.high.marsh,struikvegetatie.in.moerasgebied.hoog,nat.shrub.grass
+333,nat.high.misc,overige.struikvegetatie.hoog,nat.shrub.grass
+32,nat.low.dune,duinen.met.lage.vegetatie,nat.shrub.grass
+36,nat.low.heath,heide,nat.shrub.grass
+37,nat.low.heath.grass,matig.vergraste.heide,nat.shrub.grass
+38,nat.low.heath.moregrass,sterk.vergraste.heide,nat.shrub.grass
+34,nat.low.duneheath,duinheide,nat.shrub.grass
+30,nat.low.kwelder,kwelders,nat.shrub.grass
+39,nat.low.peat,hoogveen,nat.shrub.grass
+41,nat.low.moist,overige.moeras.vegetatie,nat.shrub.grass
+42,nat.low.reed,rietvegetatie,nat.shrub.grass
+322,nat.low.marsh.shrub,struikvegetatie.in.moerasgebied.laag,nat.shrub.grass
+321,nat.low.pat.shrub,struikvegetatie in hoogveengebied (laag),nat.shrub.grass
+323,nat.low.shrub,overige.struikvegetatie.laag,nat.shrub.grass
+31,nat.open.coast,open.zand.in.kustgebied,nat.shrub.grass
+35,nat.open.rivdune,open.stuifzand.enof.rivierzand,nat.shrub.grass
+23,urb.grass.primary,gras.in.primair.bebouwd.gebied,urban
+24,urb.bare,kale.grond.in.bebouwd.gebied,urban
+28,urb.grass,gras.in.secundair.bebouwd.gebied,urban
+18,urb.primary,bebouwing.in.primair.bebouwd.gebied,urban
+19,urb.secondary,bebouwing.in.secundair.bebouwd.gebied,urban
+25,,wegen.en.spoorwegen,urban
+26,urb.rural,bebouwing.in.buitengebied,urban
+251,infr.primary,hoofdinfrastructuur en spoorbaanlichamen,urban
+252,infr.secondary,"halfverharde wegen, infrastructuur langzaam verkeer en overige infrastructuur",urban
+253,infr.tertiary,smalle wegen,urban
+27,urb.misc,overig.grondgebruik.in.buitengebied,urban
