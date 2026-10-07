@@ -1,3 +1,5 @@
+The file "MS Ephemera danica Supplementary Data.pdf" contains the supplementary data to the manuscript.
+
 Folders:
 - Photos: photos (dorsal and lateral) of adult mayflies. Filenames correspond to Ind.code in the dataset.
 - Data analysis, with
