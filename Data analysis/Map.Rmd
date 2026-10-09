@@ -1,7 +1,7 @@
 ---
 title: "Overzichtskaart"
-author: "Leon van Kouwen, l.vankouwen@has.nl"
-date: "2025-11-10"
+author: "Leon van Kouwen"
+date: "2024-11-19"
 output: pdf_document
 ---
 
@@ -17,8 +17,10 @@ library(tidyr)
 library(sf)
 library(grid)
 library(gridExtra)
+library(maptiles)
 library(eurostat)
 library(terra)
+library(tidyterra)
 library(ggpubr)
 library(patchwork)
 library(raster)
@@ -34,20 +36,20 @@ library(cowplot)
 
 ```{r load and process data}
 
+figwidthhalf_mm <- 84
+figwidthfull_mm <- 174
+
 pad.scale.x <- 5
 pad.scale.y <- 5
   
-Netherlands <- st_read(".\\GIS\\Nederland.shp")
+Netherlands <- st_read("..\\..\\..\\Manuscript RFP index\\Data analysis\\GIS\\Nederland.shp")%>% st_transform(4326)
 Netherlands.dissolved <- Netherlands %>% group_by(rubriek) %>% summarise() 
 
 Netherlands.bbox <- Netherlands.dissolved %>% st_buffer(dist=5000) %>% st_bbox()
 
-dutch.streams <- st_read(".\\GIS\\DutchStreamsFull.shp")
+dutch.streams <- st_read("..\\..\\GIS\\DutchStreamsFull.shp") %>% st_transform(4326)
 
-
-# this dataset has not been added to the repository. It can be downloaded from
-# the Dutch water quality portal: https://wkp.rws.nl/. 
-total.mf <- fread("MF_DATA.CSV") %>% 
+total.mf <- fread("..\\..\\..\\Data backup files\\Update datasets voor 2021-2022\\Total.MF.20231123.csv" ) %>%
   mutate(level = twn_taxonlevel(Taxon))
 
 total.mf.taxlevel <- total.mf %>% 
@@ -64,16 +66,23 @@ total.mf <- total.mf %>%
   summarise(n = sum(Waarde))
 
 total.mf.sf <- total.mf %>% 
-  st_as_sf(coords = c("RD_x", "RD_y"), crs = 28992) %>%
-  st_intersection(Netherlands.dissolved)
+  st_as_sf(coords = c("RD_x", "RD_y"), crs = 28992) %>% st_transform(4326) %>%
+  st_intersection(Netherlands.dissolved) %>%
+  st_transform(4326)
+
+# eventueel eruit want duurt lang.
 
 hierdensebeek <- st_read("..\\00 Raw_data\\gis\\Hierdensebeek.shp") %>%
+  st_transform(4326) %>%
   summarise()
 
 hierdensebeek.bbox <- hierdensebeek %>%
   st_simplify(preserveTopology = FALSE, dTolerance = 1000) %>%
   st_buffer(dist=500) %>%
+  st_transform(4326) %>%
   st_bbox()
+
+## 
 
 x_corr.ct <- hierdensebeek.bbox["xmax"]-hierdensebeek.bbox["xmin"]
 y_corr.ct <- hierdensebeek.bbox["ymax"]-hierdensebeek.bbox["ymin"]
@@ -83,10 +92,12 @@ hierd.traject<- st_read("..\\00 Raw_data\\gis\\Hierd_traject.shp") %>%
   filter(db_id==607861) %>%
   mutate(name=c("Hierd0","Hierd2","Hierd4")) %>%
   filter(!name=="Hierd2") 
+  
 
 hierd.traject.point <- hierd.traject %>% 
   st_line_sample(sample = 0.5) %>%
-  st_cast("POINT")
+  st_cast("POINT") %>%
+  st_transform(4326)
 
 hierd.traject.bbox <- hierd.traject %>% 
   st_simplify(preserveTopology = FALSE, dTolerance = 1000) %>%
@@ -108,10 +119,12 @@ hierd.traject.bbox["ymin"] <- hierd.traject.bbox["ymin"] - 2000
 hierd.traject.bbox["xmin"] <- hierd.traject.bbox["xmin"] - 1000
 hierd.traject.bbox["xmax"] <- hierd.traject.bbox["xmax"] + 1000 
 
+hierd.traject.bbox <- hierd.traject.bbox %>% st_transform(4326)
+
 hierd.locations <- fread("..\\00 Raw_data\\gis\\Hierd coordinaten.csv") %>%
   clean_names() %>%
   filter(trajectnaam_nieuw_2024 %in% c("Hierd0", "Hierd4")) %>%
-  st_as_sf(coords = c("rd_x", "rd_y"), crs = 28992)
+  st_as_sf(coords = c("rd_x", "rd_y"), crs = 28992) 
 
 hierd0 <- hierd.locations %>% 
   filter(trajectnaam_nieuw_2024 == "Hierd0") %>%
@@ -127,6 +140,7 @@ hierd4 <- hierd.locations %>%
   filter(!grepl("geschrapt", name))
 
 hierd4.bbox <- hierd4 %>% st_buffer(dist=100) %>% st_bbox()
+
 hierd4.center_x <- (hierd4.bbox["xmin"] + hierd4.bbox["xmax"]) / 2
 hierd4.center_y <- (hierd4.bbox["ymin"] + hierd4.bbox["ymax"]) / 2
 hierd4.bbox["xmin"] <- hierd4.center_x - x_corr / 2
@@ -143,7 +157,12 @@ hierd0.bbox["ymin"] <- hierd0.bbox["ymin"] - adjust_x
 hierd0.bbox["ymax"] <- hierd0.bbox["ymax"] + adjust_x 
 
 
-# cut sections for plot
+hierd.locations <- hierd.locations %>% st_transform(4326)
+hierd0.bbox <- hierd0.bbox %>% st_transform(4326)
+hierd4.bbox <- hierd4.bbox %>% st_transform(4326)
+
+# beken knippen
+
 hierd.traject.beek <- hierdensebeek %>% 
   st_crop(hierd.traject.bbox)#%>%
 
@@ -157,37 +176,17 @@ hierd4.beek <- hierdensebeek %>%
 
 ```{r process LGN data, echo=FALSE}
 
-LGN.style <- fread("..\\00 Raw_data\\gis\\LGN_grouped_20240925.csv") %>% 
-  left_join(data.frame(LGN_grouped_large = c("agri.grass","nat.for", "urban", "agri.cult", "nat.shrub.grass", "aq"),
-                       hex.code = c("#FFD700", "#006400", "#808080","#FF8C00","#8FBC8F", "#2f97ef")))
+hierdensebeek.lgn <- get_tiles(x = hierdensebeek.bbox,  crop = TRUE,
+  provider = "CartoDB.VoyagerNoLabels", zoom=13, retina = T)
 
-LGN.fill <- setNames(alpha(LGN.style$hex.code, 0.4), LGN.style$LGN_grouped_large)
+hierd.traject.lgn <- get_tiles(x = hierd.traject.bbox,  crop = TRUE,
+  provider = "CartoDB.VoyagerNoLabels", zoom=13, retina = T)
 
-# this dataset has not been added to the repository. It can be downloaded from
-# https://lgn.nl/
-LGN <- rast("LGN2022.tif") 
+hierd0.lgn <-  get_tiles(x = hierd0.bbox,  crop = TRUE,
+  provider = "Esri.WorldTopoMap", zoom=18, retina = T)
 
-hierdensebeek.lgn <- LGN %>%
-  crop(hierdensebeek.bbox) %>%
-  raster::aggregate(fact = 10, fun="modal") %>%
-  as.data.frame(xy=T) %>%
-  left_join(LGN.style, by = c("LGN2022" = "nr"))  
-
-hierd.traject.lgn <- LGN %>%
-  crop(hierd.traject.bbox) %>%
-  #raster::aggregate(fact = 5, fun="modal") %>%
-  as.data.frame(xy=T) %>%
-  left_join(LGN.style, by = c("LGN2022" = "nr"))  
-
-hierd0.lgn <- LGN %>%
-  crop(hierd0.bbox) %>%
-  as.data.frame(xy=T) %>%
-  left_join(LGN.style, by = c("LGN2022" = "nr"))  
-
-hierd4.lgn <- LGN %>%
-  crop(hierd4.bbox) %>%
-  as.data.frame(xy=T) %>%
-  left_join(LGN.style, by = c("LGN2022" = "nr"))  
+hierd4.lgn <-  get_tiles(x = hierd4.bbox,  crop = TRUE,
+  provider = "Esri.WorldTopoMap", zoom=18, retina = T)
 
 
 ```
@@ -198,10 +197,26 @@ SHP_0 <- get_eurostat_geospatial(resolution = 10,
                                  nuts_level = 0, 
                                  year = 2010)
 
+
+# SHP_0_NL <- filter(SHP_0, id=="NL")
+# st_set_crs(SHP_0_NL) <- st_crs(SHP_0)
+# 
+# st_set_crs(SHP_0_NL, st_crs(SHP_0))
+# 
+# st_crs(SHP_0_NL) <- st_crs(SHP_0)
+
 SHP_0.xmin <- -9
 SHP_0.xmax <- 13.48
 SHP_0.ymin <- 45
 SHP_0.ymax <- 59
+
+# SHP_0 <- st_crop(SHP_0,
+#   xmin = SHP_0.xmin,
+#   xmax = SHP_0.xmax,
+#   ymin = SHP_0.ymin,
+#   ymax = SHP_0.ymax
+# )
+
 
 map.europe <- 
   SHP_0 %>% 
@@ -210,6 +225,8 @@ map.europe <-
   scale_fill_manual(values = c(NL = "#CCE1D5"), na.value = "white")+
   coord_cartesian(xlim=c(SHP_0.xmin, SHP_0.xmax), ylim = c(SHP_0.ymin, SHP_0.ymax))+
   coord_sf(st_crs(SHP_0), xlim = c(-9, 13.48), ylim = c(45, 59), expand = FALSE, clip = "on")+
+  #  scale_x_continuous(limits = c(SHP_0.xmin, SHP_0.xmax)) +
+  #  scale_y_continuous(limits = c(SHP_0.ymin, SHP_0.ymax)) +
   theme(axis.line=element_blank(),
         axis.text.x=element_blank(),
         axis.text.y=element_blank(),
@@ -229,16 +246,17 @@ map.europe <-
 plot.netherlands <- 
   ggplot()+
   layer_spatial(Netherlands.bbox, alpha=0, linewidth=.7, color = "grey")+
-  geom_sf(data=Netherlands.dissolved, color="black", fill="white")+ 
+  geom_sf(data=Netherlands.dissolved, color="black", fill="white")+ #color="#7a8780", fill="#CCE1D5"
   geom_sf(color="#2f97ef", linewidth=.3, data = dutch.streams)+
-  geom_sf(data=total.mf.sf, color="black", size=.5)+
+  geom_sf(data=total.mf.sf, color="black", size=1)+
   geom_sf(data = st_as_sfc(st_bbox(hierdensebeek.bbox)), 
         fill = NA, 
         color = "red", 
-        linewidth = .5, 
+        linewidth = .8, 
         alpha = 0.2)+
-  scale_fill_manual(values = LGN.fill) +
-  scale_color_manual(values = LGN.fill) +
+#  geom_raster(data = Netherlands.lgn, aes(x = x, y = y, fill = LGN_grouped_large))+
+  # scale_fill_manual(values = LGN.fill) +
+  # scale_color_manual(values = LGN.fill) +
   labs(x=NA, y=NA) + 
   coord_sf(datum = NA, expand = FALSE)+
   guides(fill= guide_legend(title= "Land use type", size=5))+
@@ -258,14 +276,14 @@ plot.netherlands <-
       plot.margin = margin(0, 0, 0, 0))+ 
   annotation_scale(location = "bl", width_hint = 0.2,
                    pad_x = unit(pad.scale.x, "pt"),
-                   pad_y = unit(pad.scale.y, "pt"), text_cex = .67) 
+                   pad_y = unit(pad.scale.y, "pt"), text_cex = 1) 
 
 plot.netherlands <- plot.netherlands+
   annotate("text",
            x = -Inf, y = Inf,
-           label = "A",
+           label = "a",
            hjust = -0.5, vjust = 1.5,
-           size = 2.5, fontface = "bold") +
+           size = 5, fontface = "bold") +
   theme(plot.margin = margin(0, 0, 0, 0))
 
 plot.netherlands <- ggdraw()+
@@ -281,30 +299,10 @@ plot.netherlands <- ggdraw()+
 
 ```{r plot catchment, echo=F}
 
-arrow.length <- 5000  
-arrow.shrink <- 300
-
-# arrow for current direction
-arrow.x.min <- min(hierdensebeek.lgn$x) + 7500
-arrow.y.min <- min(hierdensebeek.lgn$y) + 9000
-
-dx <- max(hierdensebeek.lgn$x) - 5000 - arrow.x.min
-dy <- max(hierdensebeek.lgn$y) + 3000 - arrow.y.min
-len <- sqrt(dx^2 + dy^2)
-
-arrow.x.max <- arrow.x.min + (dx / len) * arrow.length
-arrow.y.max <- arrow.y.min + (dy / len) * arrow.length
-
-# calculate arrow angle
-arrow.angle <- 180 + (atan2((arrow.y.max - arrow.y.min), 
-                            (arrow.x.max - arrow.x.min)) * 180 / pi)
-
-offset_x <- 0
-offset_y <- 0
-
-# calculate range
+# ranges berekenen
 Hierd0_range <- hierd.traject %>% 
   filter(name=="Hierd0") %>% 
+  
   mutate(
     x_min = min(st_coordinates(.)[,1]),
     x_max = max(st_coordinates(.)[,1]),
@@ -325,54 +323,40 @@ Hierd4_range <- hierd.traject %>%
   st_drop_geometry() %>% 
   dplyr::select(x_min, x_max, y_min, y_max)
 
-# distance between locations
+# afstand tussen trajecten
 stretch_distance <- sqrt(
   (Hierd4_range$x_max - Hierd0_range$x_min)^2 + 
   (Hierd4_range$y_min - Hierd0_range$y_max)^2
 ) %>% round(0)
 
-arrow.angle.traject <- 180 + (
-  atan2((Hierd4_range$y_min - (Hierd0_range$y_max + offset_y)), 
-        ((Hierd4_range$x_max + offset_x) - (Hierd0_range$x_min + offset_x))) * 180 / pi
-)
-
-# shorten arrow
-dx_t <- (Hierd4_range$x_max + offset_x) - (Hierd0_range$x_min + offset_x)
-dy_t <- (Hierd4_range$y_min) - (Hierd0_range$y_max + offset_y)
-len_t <- sqrt(dx_t^2 + dy_t^2)
-
-x_start <- Hierd0_range$x_min + offset_x + (dx_t/len_t) * arrow.shrink
-y_start <- Hierd0_range$y_max + offset_y + (dy_t/len_t) * arrow.shrink
-x_end   <- Hierd4_range$x_max + offset_x - (dx_t/len_t) * arrow.shrink
-y_end   <- Hierd4_range$y_min - (dy_t/len_t) * arrow.shrink
 
 # plot
-plot.hierdensebeek <- ggplot() +
-  geom_raster(data = hierdensebeek.lgn, aes(x = x, y = y, fill = LGN_grouped_large))+
+plot.hierdensebeek <- 
+  ggplot() +
+  geom_spatraster_rgb(data = hierdensebeek.lgn)+
   geom_sf(color="#2f97ef", linewidth=.3, data = hierdensebeek) +
-  geom_sf(color="black", data = hierd.traject.point, size=2) +
+  geom_sf(color="black", data = hierd.traject.point, size=3) +
   
-  # arrow current direction
-  geom_segment(aes(x = arrow.x.min, y = arrow.y.min, xend = arrow.x.max, yend = arrow.y.max),
-               arrow = grid::arrow(length = unit(0.2, "cm"), type = "closed", angle = 10), 
-               size = .8, color="darkblue")+
-  
-  # arrow between locations
-  geom_segment(aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
-               arrow = grid::arrow(ends="both", length = unit(0.2, "cm"), 
+  # # pijl voor stromingsrichting
+  geom_segment(aes(x = 5.782585, y = 52.312991, xend = 5.752544, yend = 52.356365),
+               arrow = grid::arrow(length = unit(0.2, "cm"), type = "closed", angle = 10),
+               size = 1.2, color="darkblue")+
+
+  # pijl voor afstand tussen trajecten (ingekort)
+  geom_segment(aes(x = 5.7065, y = 52.323458, xend = 5.719096, yend = 52.306537),
+               arrow = grid::arrow(ends="both", length = unit(0.2, "cm"),
                                    type = "closed", angle = 10),
-               size = .5, color = "#333333")+
+               size = 1, color = "#333333")+
   
-  # label distance
-  annotate("text", x = (x_start + x_end)/2+2000, y = (y_start + y_end)/2, 
+  # label met afstand
+  annotate("text", x = 5.738555, y = 52.313621, 
              label = paste0(format(stretch_distance, big.mark = ",", decimal.mark = ".", scientific = FALSE), " m"), 
-             size = 3) +
+             size = 5) +
   
   layer_spatial(hierdensebeek.bbox, alpha=0, linewidth=.7, color = "grey")+ 
-  scale_fill_manual(values = LGN.fill) +
-  scale_color_manual(values = LGN.fill) +
-  labs(x=NA, y=NA) + 
+
   coord_sf(datum = NA, expand = FALSE)+
+  #guides(fill= guide_legend(title= "Land use type", size=5))+
   theme(axis.line = element_blank(),
         axis.text = element_blank(),
         axis.ticks = element_blank(),
@@ -389,14 +373,14 @@ plot.hierdensebeek <- ggplot() +
         plot.margin = margin(0, 0, 0, 0))+
   annotation_scale(location = "bl", width_hint = 0.3,
                    pad_x = unit(pad.scale.x, "pt"),
-                   pad_y = unit(pad.scale.y, "pt"), text_cex = .67) 
+                   pad_y = unit(pad.scale.y, "pt"), text_cex = 1) 
 
 plot.hierdensebeek <- plot.hierdensebeek +   
   annotate("text",
            x = -Inf, y = Inf,
-           label = "B",
+           label = "b",
            hjust = -0.5, vjust = 1.5,
-           size = 2.5, fontface = "bold") +
+           size = 5, fontface = "bold") +
   theme(plot.margin = margin(0, 0, 0, 0))
 
 
@@ -404,30 +388,22 @@ plot(plot.hierdensebeek)
 
 plot.hierdensebeek <- ggdraw() + draw_plot(plot.hierdensebeek)
 
-x_range <- diff(range(hierdensebeek.lgn$x, na.rm = TRUE))
-y_range <- diff(range(hierdensebeek.lgn$y, na.rm = TRUE))
-aspect_ratio <- y_range / x_range
+ggsave("hierdensebeek.png", width = 8.8, height = , units = "cm", dpi=1200)  
+ggsave("hierdensebeek.pdf", width = 8.8, height = , units = "cm", dpi=1200)  
 
-ggsave("hierdensebeek.png", width = 8.8, height = 8.8*aspect_ratio, units = "cm", dpi=1200)  
-ggsave("hierdensebeek.pdf", width = 8.8, height = 8.8*aspect_ratio, units = "cm", dpi=1200)  
-
-plot_crop("hierdensebeek.png")
 
 ```
 
-```{r plot Hierd0, upstream location, echo=F}
+```{r plot Hierd0, echo=F}
 
 plot.hierd0 <- 
   ggplot() +
-  geom_raster(data = hierd0.lgn, aes(x = x, y = y, fill = LGN_grouped_large)) +
+  geom_spatraster_rgb(data = hierd0.lgn) +
   geom_sf(color="#2f97ef", linewidth=.5, data = hierd0.beek) +
-  geom_sf(color="black", linewidth=2, data = hierd0) +
+  geom_sf(color="black", size=3, data = hierd0) +
   layer_spatial(hierd0.bbox, alpha=0, linewidth=.7, color = "grey")+ 
-  scale_fill_manual(values = LGN.fill) +
-  scale_color_manual(values = LGN.fill) +
   labs(x=NA, y=NA) + 
   coord_sf(datum = NA, expand = FALSE)+
-  guides(fill= guide_legend(title= "Land use type", size=5))+
   theme(axis.line = element_blank(),
       axis.text = element_blank(),
       axis.ticks = element_blank(),
@@ -444,15 +420,15 @@ plot.hierd0 <-
       plot.background = element_rect(fill = "white", color=NA))+
   annotation_scale(location = "bl", width_hint = 0.25,
                    pad_x = unit(pad.scale.x, "pt"),
-                   pad_y = unit(pad.scale.y, "pt"), text_cex = .67) 
+                   pad_y = unit(pad.scale.y, "pt"), text_cex = 1) 
 
 
 plot.hierd0 <- plot.hierd0 + 
   annotate("text",
            x = -Inf, y = Inf,
-           label = "C",
+           label = "c",
            hjust = -0.5, vjust = 1.5,
-           size = 2.5, fontface = "bold") +
+           size = 5, fontface = "bold") +
   theme(plot.margin = margin(0, 0, 0, 0))
 
 
@@ -460,28 +436,20 @@ plot(plot.hierd0)
 
 plot.hierd0 <- ggdraw() + draw_plot(plot.hierd0)
 
-x_range <- diff(range(hierd0.lgn$x, na.rm = TRUE))
-y_range <- diff(range(hierd0.lgn$y, na.rm = TRUE))
-aspect_ratio <- y_range / x_range
-
-ggsave("hierd0.png", width = 8.8, height = 8.8*aspect_ratio, units = "cm", dpi=1200)  
-plot_crop("hierd0.png")
+ggsave("hierd0.png", width = 8.8, height = , units = "cm", dpi=1200)  
 
 ```
 
-```{r plot Hierd4, downstream location, echo=F}
+```{r plot Hierd4, echo=F}
 
 plot.hierd4 <- 
   ggplot() +
-  geom_raster(data = hierd4.lgn, aes(x = x, y = y, fill = LGN_grouped_large)) +
+  geom_spatraster_rgb(data = hierd4.lgn)+
   geom_sf(color="#2f97ef", linewidth=.5, data = hierd4.beek) +
-  geom_sf(color="black", linewidth=2, data = hierd4) +
+  geom_sf(color="black", size=3, data = hierd4) +
   layer_spatial(hierd4.bbox, alpha=0, linewidth=.7, color = "grey")+ 
-  scale_fill_manual(values = LGN.fill) +
-  scale_color_manual(values = LGN.fill) +
   labs(x=NA, y=NA) + 
   coord_sf(datum = NA, expand = FALSE)+
-  guides(fill= guide_legend(title= "Land use type", size=5))+
   theme(axis.line = element_blank(),
       axis.text = element_blank(),
       axis.ticks = element_blank(),
@@ -498,15 +466,15 @@ plot.hierd4 <-
       plot.background = element_rect(fill = "white", color=NA))+
   annotation_scale(location = "bl", width_hint = 0.25,
                    pad_x = unit(pad.scale.x, "pt"),
-                   pad_y = unit(pad.scale.y, "pt"), text_cex = .67) 
+                   pad_y = unit(pad.scale.y, "pt"), text_cex = 1) 
 
 
  plot.hierd4 <- plot.hierd4 + 
    annotate("text",
            x = -Inf, y = Inf,
-           label = "D",
+           label = "d",
            hjust = -0.5, vjust = 1.5,
-           size = 2.5, fontface = "bold") +
+           size = 5, fontface = "bold") +
   theme(plot.margin = margin(0, 0, 0, 0))
  
 
@@ -515,18 +483,14 @@ plot(plot.hierd4)
 
 plot.hierd4 <- ggdraw() + draw_plot(plot.hierd4)
 
-x_range <- diff(range(hierd4.lgn$x, na.rm = TRUE))
-y_range <- diff(range(hierd4.lgn$y, na.rm = TRUE))
-aspect_ratio <- y_range / x_range
-
-ggsave("hierd4.png", width = 8.8, height = 8.8*aspect_ratio, units = "cm", dpi=1200)  
-plot_crop("hierd4.png")
+ggsave("hierd4.png", width = 8.8, , units = "cm", dpi=1200)  
 
 ```
 
-```{r arrange one row, echo=F}
+```{r arrange één rij, echo=F}
 
-# aspect ratios
+
+# aspect ratio’s
 ar_nl <- (Netherlands.bbox["ymax"] - Netherlands.bbox["ymin"]) /
           (Netherlands.bbox["xmax"] - Netherlands.bbox["xmin"])
 ar_hb <- (hierdensebeek.bbox["ymax"] - hierdensebeek.bbox["ymin"]) /
@@ -536,21 +500,23 @@ ar_h0 <- (hierd0.bbox["ymax"] - hierd0.bbox["ymin"]) /
 ar_h4 <- (hierd4.bbox["ymax"] - hierd4.bbox["ymin"]) /
           (hierd4.bbox["xmax"] - hierd4.bbox["xmin"])
 
-# relative widths
+# relatieve breedtes (hoogte overal gelijk)
 rel_widths <- c(1/ar_nl, 1/ar_hb, 1/ar_h0, 1/ar_h4)
 rel_widths <- rel_widths / sum(rel_widths)
 
-# combine in one row
+# combineer in één rij
 final_plot <- plot.netherlands + plot.hierdensebeek + plot.hierd0 + plot.hierd4 +
   plot_layout(ncol = 4, widths = rel_widths) +
-  theme(plot.margin = margin(0, 0, 0, 0),
-    panel.spacing = unit(0, "pt"))
+  theme(
+    plot.margin = margin(0, 0, 0, 0),  # forceer ook globaal nulmarges
+    panel.spacing = unit(0, "pt")      # geen ruimte tussen panelen
+  )
 
 ```
 
-```{r arrange plots square, echo = F}
+```{r arrange plots vierkant, echo = F}
 
-# aspect ratios
+# aspect ratio’s
 ar_nl <- (Netherlands.bbox["ymax"] - Netherlands.bbox["ymin"]) /
           (Netherlands.bbox["xmax"] - Netherlands.bbox["xmin"])
 ar_hb <- (hierdensebeek.bbox["ymax"] - hierdensebeek.bbox["ymin"]) /
@@ -560,16 +526,15 @@ ar_h0 <- (hierd0.bbox["ymax"] - hierd0.bbox["ymin"]) /
 ar_h4 <- (hierd4.bbox["ymax"] - hierd4.bbox["ymin"]) /
           (hierd4.bbox["xmax"] - hierd4.bbox["xmin"])
 
-# relative widths
+# relatieve breedtes (hoogte overal gelijk)
 rel_widths <- c(1/ar_nl, 1/ar_hb, 1/ar_h0, 1/ar_h4)
 rel_widths <- rel_widths / sum(rel_widths)
 
-# save
-target_height_cm <- 8
-target_width_cm <- 8
+# opslaan – totale hoogte vast, breedte afgeleid
 total_width_units <- sum(1 / c(ar_nl, ar_hb, ar_h0, ar_h4))
 ideal_aspect <- total_width_units / 1
-final_width_cm <- target_height_cm * ideal_aspect
+final_height_mm <- figwidthfull_mm / ideal_aspect
+
 
 rel_widths_1 <- c(1/ar_nl, 1/ar_hb)
 rel_widths_1 <- rel_widths_1 / sum(rel_widths_1)
@@ -593,9 +558,14 @@ final_plot_2 <- ggarrange(plot.hierd0 + theme(plot.margin = margin(1, 1, 0, 0, u
                           plot.hierd4 + theme(plot.margin = margin(1, 0, 0, 1, unit = "mm")),
                           widths = rel_widths_2, nrow=1, align = "h")
 
-final_plot <- ggarrange(final_plot_1, final_plot_2, nrow=2, heights = c(0.6, 0.4), align = "v")
+final_plot <- ggarrange(final_plot_1, final_plot_2, nrow=2, heights = c(0.605, 0.395), align = "hv")
 
-ggsave("final_plot.png", final_plot, width = target_width_cm, height = target_width_cm*1.18, units = "cm", dpi = 300, bg = "white")
-ggsave("final_plot.pdf", final_plot, width = target_width_cm, height = target_width_cm*1.15, units = "cm", dpi = 300, bg = "white")
+ggsave("final_plot.png", final_plot, width = figwidthfull_mm, height = figwidthfull_mm*1.2, units = "mm", dpi = 1200, bg = "white")
+ggsave("final_plot.pdf", final_plot, width = figwidthfull_mm, height = figwidthfull_mm*1.2, units = "mm", dpi = 1200, bg = "white")
+ggsave("final_plot.eps", final_plot, width = figwidthfull_mm, height = figwidthfull_mm*1.2, units = "mm", dpi = 1200, bg = "white")
+
+
+
+
 
 ```

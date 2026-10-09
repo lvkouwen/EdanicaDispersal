@@ -1,7 +1,7 @@
 ---
 title: "Data exploration and selection"
-author: "Leon van Kouwen, l.vankouwen@has.nl"
-date: "2025-11-10"
+author: "Leon van Kouwen"
+date: "2025-02-21"
 output: pdf_document
 ---
 
@@ -17,6 +17,7 @@ library(ggpubr)
 library(ggpmisc)
 library(ggrepel)
 library(ggforce)
+library(forcats)
 library(GGally)
 library(janitor)
 library(MASS)
@@ -30,19 +31,65 @@ library(emmeans)
 
 options("scipen"=1, "digits"=7)
 
+my_theme <-   theme(text = element_text(size=7, face="bold"),
+        axis.title.y = element_blank(),
+        strip.placement = "outside",
+        axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+        axis.text.y=element_text(hjust=.8,  color="black"),
+        legend.position = "none",
+        axis.ticks.y = element_line(linewidth = .2, color="grey"),
+        axis.ticks.x = element_line(linewidth = .2, color="grey"),
+        panel.background = element_blank(),
+        plot.background =  element_rect(colour = "white", fill = "white", linewidth = 0.5),
+        panel.border = element_rect(colour = "grey", fill="white", linewidth=.5),
+        panel.spacing.x = unit(0.1, "lines"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face="bold", hjust=.5),
+        plot.margin = margin(1,0,0,0, "mm"),
+#        panel.grid.major.y = element_line(size = 0.1, linetype = 'solid',
+ #                               colour = "lightgrey"), 
+        panel.grid.major.x = element_blank())
+
+plot_order <- c(   "dry_weight",
+     "dry_weight_residual_relative",
+     "pca_ax1",
+   "body_length",
+   "pronotum_width",
+   "mesonotum_width",
+   "wing_area"
+#  "dry_weight_pr
+)
+
 ```
 
-```{r load and format data}
+```{r load data}
+figwidthhalf_mm <- 84
+figwidthfull_mm <- 174
 
-mayflies_lab <- fread(".//Data//raw_data_edanica.csv") %>%
+cols <- c("f"="black","m"="gray")
+cols.clean <-  c("black","gray")
+
+mayflies_lab <- fread("..//00 Raw_data//raw_data_20250826.csv") %>%
   mutate(date_sample = as.Date(date_sample,  origin = "1899-12-30"),
          date_photo = as.Date(date_photo, origin = "1899-12-30",),
          dry_weight = case_when(dry_weight>50 ~ NA,
                                 .default = dry_weight)) #%>%
   
+mayflies_lab %>% dplyr::group_by(location) %>%
+  dplyr::filter(!is.na(sex)) %>%
+  dplyr::summarize(sum = sum(mayflies, na.rm=T),
+                   mean = mean(mayflies, na.rm=T),
+                   sd = sd(mayflies, na.rm=T))
+
+mayflies_lab %>% dplyr::group_by(sex) %>%
+  dplyr::summarize(sum = sum(mayflies, na.rm=T),
+                   mean = mean(mayflies, na.rm=T),
+                   sd = sd(mayflies, na.rm=T))
+
 mayflies_lab_long <- mayflies_lab %>% 
-  pivot_longer(cols = c(10, 12, 13, 15, 16), 
+  pivot_longer(cols = c(11,13:17,20:30,36,39), 
                names_to = "parameter", values_to = "value")
+
 
 mayflies_field_NA <- mayflies_lab %>% 
   dplyr::group_by(date_sample, location, transect, distance, sex) %>%
@@ -64,6 +111,10 @@ mayflies_field <- mayflies_lab %>%
 
 rm(mayflies_field_NA)
 
+env_data <- fread("..//00 Raw_data//raw_data_env_250214.csv") %>%
+  mutate(date_photo_shade = as.Date(date_photo_shade,  origin = "1899-12-30"),
+         date_nymph= as.Date(date_nymph, origin = "1899-12-30",))
+
 facets <- c("body_length" = "Body length (mm)",
             "pronotum_width" = "Pronotum width (mm)",
             "mesonotum_width" = "Mesonotum width (mm)",
@@ -77,23 +128,15 @@ facets <- c(
   "pronotum_width" = "Pronotum\nwidth (mm)",
   "mesonotum_width" = "Mesonotum\nwidth (mm)",
   "wing_area" = "Wing area (mm²)",
-  "dry_weight" = "Dry weight (mg)")
+  "dry_weight" = "Dry weight (mg)"
+#  "dry_weight_residual_relative" = "Relative residual\ndry weight (%)"
+  #"dry_weight_predicted_relative" = "Predicted dry weight (%)"
+)
 
-my_theme <-   theme(text = element_text(size=7, face="bold"),
-        axis.title.y = element_blank(),
-        strip.placement = "outside",
-        axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
-        axis.text.y=element_text(hjust=.8,  color="black"),
-        legend.position = "none",
-        axis.ticks.y = element_line(linewidth = .2, color="grey"),
-        axis.ticks.x = element_line(linewidth = .2, color="grey"),
-        panel.background = element_blank(),
-        plot.background =  element_rect(colour = "white", fill = "white", linewidth = 0.5),
-        panel.border = element_rect(colour = "grey", fill="white", linewidth=.5),
-        panel.spacing.x = unit(0.1, "lines"),
-        strip.background = element_blank(),
-        strip.text = element_text(colour = "black", face="bold", hjust=.5),
-        plot.margin = margin(1,0,0,0, "mm"))
+
+parms_selected <- c("body_length", "dry_weight", "wing_area", "pronotum_width", "mesonotum_width")
+
+
 ```
 
 reliability check for wing area. based on this --> removed reliability = 3.
@@ -111,7 +154,18 @@ plot_wing_reliability <- mayflies_lab_long %>%
               width = 0.15) +
   geom_boxplot(fill="white", outlier.color="grey", outlier.size = .5)+
   ggtitle("wing reliability")+
-  my_theme+
+  theme(plot.title = element_text(hjust = 0.5, size=7), 
+       text = element_text(size=7, face="bold"),
+       axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+       axis.text.y=element_text(hjust=.8,  color="black"),
+       legend.position = "none",
+       axis.ticks = element_line(linewidth = .2, color="grey"),
+       panel.background = element_blank(),
+       panel.border = element_rect(colour = "black", fill=NA, linewidth=.05),
+       strip.background = element_rect(color="black", fill=NA, linewidth=.05, linetype="solid"),
+       strip.text.x = element_text(colour = "black", face="bold"),
+       strip.text.y = element_text(colour = "black", face="bold", size=3),
+       plot.margin = margin(2,3,0,2, "mm"))+
   facet_wrap(~parameter, scale="free_y")
 
 plot_thorax_reliability <- mayflies_lab_long %>% 
@@ -123,7 +177,18 @@ plot_thorax_reliability <- mayflies_lab_long %>%
               width = 0.15) +
   geom_boxplot(fill="white", outlier.color="grey", outlier.size = .5)+
   ggtitle("pro- and mesonotum reliability")+
-  my_theme+
+  theme(plot.title = element_text(hjust = 0.5, size=7), 
+       text = element_text(size=7, face="bold"),
+       axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+       axis.text.y=element_text(hjust=.8,  color="black"),
+       legend.position = "none",
+       axis.ticks = element_line(linewidth = .2, color="grey"),
+       panel.background = element_blank(),
+       panel.border = element_rect(colour = "black", fill=NA, linewidth=.05),
+       strip.background = element_rect(color="black", fill=NA, linewidth=.05, linetype="solid"),
+       strip.text.x = element_text(colour = "black", face="bold"),
+       strip.text.y = element_text(colour = "black", face="bold", size=3),
+       plot.margin = margin(2,3,0,2, "mm"))+
   facet_wrap(~parameter, scale="free_y")
 
 plot_bl_reliability <- mayflies_lab_long %>% 
@@ -134,20 +199,31 @@ plot_bl_reliability <- mayflies_lab_long %>%
   stat_boxplot(geom = "errorbar",
               width = 0.15) +
   geom_boxplot(fill="white", outlier.color="grey", outlier.size = .5)+
-  ggtitle("body length reliability")+
-  my_theme+
+  ggtitle("pro- and mesonotum reliability")+
+  theme(plot.title = element_text(hjust = 0.5, size=7), 
+       text = element_text(size=7, face="bold"),
+       axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+       axis.text.y=element_text(hjust=.8,  color="black"),
+       legend.position = "none",
+       axis.ticks = element_line(linewidth = .2, color="grey"),
+       panel.background = element_blank(),
+       panel.border = element_rect(colour = "black", fill=NA, linewidth=.05),
+       strip.background = element_rect(color="black", fill=NA, linewidth=.05, linetype="solid"),
+       strip.text.x = element_text(colour = "black", face="bold"),
+       strip.text.y = element_text(colour = "black", face="bold", size=3),
+       plot.margin = margin(2,3,0,2, "mm"))+
   facet_wrap(~parameter, scale="free_y")
 
 ggarrange(plot_wing_reliability, plot_thorax_reliability, plot_bl_reliability, nrow=1)
            
 ggsave("wing_notum_reliability.pdf", 
-       width = 163.6*2, height = 163.6, units = "mm", dpi=1000)                
+       width = figwidthfull_mm, height = figwidthfull_mm/2, units = "mm", dpi=1000)                
 ggsave("wing_notum_reliability.png", 
-       width = 163.6*2, height = 163.6, units = "mm", dpi=1000)  
+       width = figwidthfull_mm, height = figwidthfull_mm/2, units = "mm", dpi=1000)  
 
 ```
 
-```{r remove unreliable measurements based on plots}
+```{r op basis van plots verwijderen van waarden}
  
 mayflies_lab_long_clean <-
    mayflies_lab_long %>%
@@ -160,9 +236,51 @@ mayflies_lab_long_clean <-
                                   .default = value),
                 value = case_when(body_length_reliability > 1 & parameter == "body_length" ~ NA,
                                   .default = value)) %>%
-  select(-body_length_reliability, -wing_reliability, -pronotum_mesonotum_reliability)
+  select(-egg_clutch, -body_length_reliability, -intact, -wing_reliability, -wing_wrinkled, -wing_damaged, -wing_double, -wing_remark, -stud_remarks, -pronotum_mesonotum_reliability, -pronotum_mesonotum_remark)
 ```
 
+
+```{r density plot of m/f}
+
+mayflies_lab_long_clean_median <- mayflies_lab_long_clean %>%
+  filter(sex=="m|f") %>%
+  dplyr::group_by(parameter, sex) %>%
+  dplyr::summarise(value=median(value, na.rm=T)) %>%
+  ungroup
+
+mayflies_lab_long_clean %>%
+  filter(sex=="f" | sex=="m") %>%
+  ggplot(aes(x=value, color=sex, fill=sex))+
+  geom_density(alpha=0.8)+
+  geom_vline(aes(xintercept = value, color=sex), linetype="dashed", data=mayflies_lab_long_clean_median)+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(expand = c(0,0))+
+  scale_fill_manual(values=cols.clean)+
+  xlab("Trait value")+
+  scale_color_manual(values=cols.clean)+
+  my_theme+
+    # theme(plot.title = element_text(hjust = 0.5, size=7), 
+    #    text = element_text(size=7, face="bold"),
+    #    axis.text.x=element_text(hjust=1,  vjust=.5, color="black"),
+    #    axis.text.y=element_text(hjust=.8,  color="black"),
+    #    legend.position = "none",
+    #    axis.ticks = element_line(linewidth = .2, color="grey"),
+    #    panel.background = element_blank(),
+    #    panel.border = element_rect(colour = "black", fill=NA, linewidth=.05),
+    #    strip.background = element_rect(color="black", fill=NA, linewidth=.05, linetype="solid"),
+    #    strip.text.x = element_text(colour = "black", face="bold"),
+    #    strip.text.y = element_text(colour = "black", face="bold", size=3),
+    #    plot.margin = margin(2,3,0,2, "mm"))+
+  facet_wrap(~fct_relevel(parameter, plot_order), scales="free", labeller=as_labeller(facets))
+
+ggsave("density_m_f.pdf", 
+       width = figwidthfull_mm, height = figwidthfull_mm, units = "mm", dpi=1200)  
+ggsave("density_m_f.png", 
+       width = figwidthfull_mm, height = figwidthfull_mm, units = "mm", dpi=1200) 
+ggsave("density_m_f.eps", 
+       width = figwidthfull_mm, height = figwidthfull_mm, units = "mm", dpi=1200)  
+
+```
 
 write everything
 
